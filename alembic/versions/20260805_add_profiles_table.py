@@ -18,7 +18,7 @@ def upgrade():
     # Create profiles table
     op.create_table(
         'profiles',
-        sa.Column('id', sa.String(length=36), primary_key=True, nullable=False),
+        sa.Column('id', sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
         sa.Column('username', sa.Text(), nullable=True),
         sa.Column('full_name', sa.Text(), nullable=True),

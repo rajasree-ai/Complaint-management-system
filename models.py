@@ -3,6 +3,7 @@ from flask_login import UserMixin
 from database import db
 import uuid
 from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import UUID
 
 
 class User(UserMixin, db.Model):
@@ -86,7 +87,7 @@ class Profiles(db.Model):
     - username: text unique with CHECK(char_length(username) >= 3)
     - full_name, avatar_url, website
     """
-    id = db.Column(db.String(36), db.ForeignKey('auth.users.id'), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = db.Column(UUID(as_uuid=True), db.ForeignKey('auth.users.id'), primary_key=True, default=uuid.uuid4)
     updated_at = db.Column(db.DateTime(timezone=True), default=func.now(), onupdate=func.now())
     username = db.Column(db.Text, unique=True, nullable=True)
     full_name = db.Column(db.Text, nullable=True)
