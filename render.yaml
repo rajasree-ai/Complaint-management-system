@@ -30,3 +30,34 @@ services:
 
 # If you prefer to define cron jobs or background workers, add them here as separate entries.
 # See Render docs: https://render.com/docs/deploy-a-python-web-service
+
+# Recommended environment variable keys to set in the Render Dashboard (do NOT commit secret values here)
+envVars:
+  - key: DATABASE_URL
+    value: ""
+  - key: NEW_DATABASE_URL
+    value: ""
+  - key: SUPABASE_URL
+    value: ""
+  - key: SUPABASE_KEY
+    value: ""
+  - key: SUPABASE_PUBLISHABLE_KEY
+    value: ""
+  - key: SUPABASE_JWKS_URL
+    value: ""
+  - key: SECRET_KEY
+    value: ""
+  - key: MAIL_SERVER
+    value: ""
+  - key: MAIL_PORT
+    value: ""
+  - key: MAIL_USE_TLS
+    value: ""
+  - key: MAIL_USE_SSL
+    value: ""
+  - key: MAIL_USERNAME
+    value: ""
+  - key: MAIL_PASSWORD
+    value: ""
+  - key: MAIL_DEFAULT_SENDER
+    value: ""
