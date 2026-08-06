@@ -14,6 +14,6 @@ realtime==2.30.0
 postgrest==2.30.0
 
 # Production/runtime dependencies for Render
-gunicorn==20.1.0
+gunicorn==23.0.0
 alembic==1.11.1
 psycopg2-binary==2.9.11
