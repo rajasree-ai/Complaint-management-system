@@ -1,16 +1,63 @@
+# Render service configuration for complaint-management-system
+# This file can be used by Render to create a Web Service from this repository.
+# Secrets and production credentials should be configured in the Render dashboard, not committed to the repo.
+
 services:
   - type: web
     name: grievance-hub
-    runtime: python
+    env: python
+    branch: main
+    plan: starter
+    # Build command (Render will run pip install -r requirements.txt by default)
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app -c gunicorn.conf.py
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.0
-      - key: SECRET_KEY
-        generateValue: true
-      - key: DATABASE_URL
-        fromDatabase:
-          name: complaint-db
-          property: connectionString
-          
+    # Start command - use Gunicorn for production WSGI
+    startCommand: gunicorn -w 4 -b 0.0.0.0:$PORT app:app
+    # Health check endpoint
+    healthCheckPath: /test
+    # Automatically deploy on branch updates
+    autoDeploy: true
+    # Run migrations after each deploy (optional): alembic must be installed in requirements
+    releaseCommand: alembic upgrade head
+
+    # Do NOT store secrets here. Set the following environment variables in the Render Dashboard
+    # DATABASE_URL, SUPABASE_URL, SUPABASE_KEY, SUPABASE_PUBLISHABLE_KEY, SECRET_KEY, MAIL_* etc.
+    # Example (set these in the Render UI):
+    # envVars:
+    #   - key: DATABASE_URL
+    #     value: "postgresql://user:pass@host:5432/db"
+    #   - key: SECRET_KEY
+    #     value: "<your-flask-secret>"
+
+# If you prefer to define cron jobs or background workers, add them here as separate entries.
+# See Render docs: https://render.com/docs/deploy-a-python-web-service
+
+# Recommended environment variable keys to set in the Render Dashboard (do NOT commit secret values here)
+envVars:
+  - key: DATABASE_URL
+    value: ""
+  - key: NEW_DATABASE_URL
+    value: ""
+  - key: SUPABASE_URL
+    value: ""
+  - key: SUPABASE_KEY
+    value: ""
+  - key: SUPABASE_PUBLISHABLE_KEY
+    value: ""
+  - key: SUPABASE_JWKS_URL
+    value: ""
+  - key: SECRET_KEY
+    value: ""
+  - key: MAIL_SERVER
+    value: ""
+  - key: MAIL_PORT
+    value: ""
+  - key: MAIL_USE_TLS
+    value: ""
+  - key: MAIL_USE_SSL
+    value: ""
+  - key: MAIL_USERNAME
+    value: ""
+  - key: MAIL_PASSWORD
+    value: ""
+  - key: MAIL_DEFAULT_SENDER
+    value: ""

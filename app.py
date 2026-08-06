@@ -39,11 +39,12 @@ database_url = database_url.strip().strip('"').strip("'")
 if database_url.startswith('postgres://'):
     database_url = database_url.replace('postgres://', 'postgresql://', 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
-
+"""
 parsed_db = urlparse(database_url)
 if parsed_db.scheme in ('postgresql', 'postgres'):
     print(f"DATABASE_URL host: {parsed_db.hostname}")
     print(f"DATABASE_URL path: {parsed_db.path}")
+"""
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.sendgrid.net')
@@ -378,7 +379,11 @@ def initialize_database():
 
     except Exception as e:
         app.logger.error('Database initialization failed: %s', e, exc_info=True)
-        print('WARNING: Database initialization failed. Application startup continues, but database access may be unavailable.')
+        print('WARNING: Database initialization failed. Application startup continues, but database access may be unavailable. Will retry on subsequent requests.')
+        return False
+
+    print('Database initialized successfully.')
+    return True
 
 
 db_initialized = False
@@ -387,8 +392,7 @@ db_initialized = False
 def startup_db():
     global db_initialized
     if not db_initialized:
-        initialize_database()
-        db_initialized = True
+        db_initialized = initialize_database()
 
 
 # ========== MAIN ROUTES ==========
