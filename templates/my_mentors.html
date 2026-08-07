@@ -3,8 +3,8 @@
 {% block content %}
 <div class="row mb-4">
     <div class="col-12">
-        <h2><i class="fas fa-chalkboard-teacher me-2"></i>Available Mentors</h2>
-        <p class="text-muted">Mentors in the {{ department }} department</p>
+        <h2><i class="fas fa-chalkboard-teacher me-2"></i>Your Assigned Mentor</h2>
+        <p class="text-muted">Mentor details assigned to your account</p>
     </div>
 </div>
 
@@ -22,9 +22,11 @@
                         Assigned Complaints: {{ mentor.assigned_complaints|length }}
                     </small>
                 </p>
-                <a href="{{ url_for('new_complaint') }}?mentor={{ mentor.id }}" class="btn btn-primary">
-                    <i class="fas fa-plus me-2"></i>Assign Complaint to {{ mentor.username }}
-                </a>
+                {% for assignment in assignments if assignment.staff_id == mentor.id %}
+                    {% if assignment.notes %}
+                        <p class="text-muted small mb-2">{{ assignment.notes }}</p>
+                    {% endif %}
+                {% endfor %}
             </div>
         </div>
     </div>
@@ -32,7 +34,7 @@
     <div class="col-12">
         <div class="alert alert-info">
             <i class="fas fa-info-circle me-2"></i>
-            No mentors available in your department yet. Please contact your HOD.
+            No mentor has been assigned to your account yet. Please contact your HOD or department staff.
         </div>
     </div>
     {% endfor %}

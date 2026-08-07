@@ -39,12 +39,11 @@ database_url = database_url.strip().strip('"').strip("'")
 if database_url.startswith('postgres://'):
     database_url = database_url.replace('postgres://', 'postgresql://', 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
-"""
+
 parsed_db = urlparse(database_url)
 if parsed_db.scheme in ('postgresql', 'postgres'):
     print(f"DATABASE_URL host: {parsed_db.hostname}")
     print(f"DATABASE_URL path: {parsed_db.path}")
-"""
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.sendgrid.net')
@@ -138,6 +137,12 @@ def get_user_accessible_complaints(user):
         return Complaint.query.filter((Complaint.assigned_to == user.id) | (Complaint.mentor_id == user.id)).all()
     else:
         return Complaint.query.filter_by(user_id=user.id).all()
+
+
+def get_primary_assigned_mentor(student):
+    """Return the primary mentor/staff assignment for a student"""
+    assignment = StudentStaffAssignment.query.filter_by(student_id=student.id).order_by(StudentStaffAssignment.assigned_at.desc()).first()
+    return assignment.staff if assignment else None
 
 
 def can_manage_user(user, target_user):
@@ -379,11 +384,7 @@ def initialize_database():
 
     except Exception as e:
         app.logger.error('Database initialization failed: %s', e, exc_info=True)
-        print('WARNING: Database initialization failed. Application startup continues, but database access may be unavailable. Will retry on subsequent requests.')
-        return False
-
-    print('Database initialized successfully.')
-    return True
+        print('WARNING: Database initialization failed. Application startup continues, but database access may be unavailable.')
 
 
 db_initialized = False
@@ -392,7 +393,8 @@ db_initialized = False
 def startup_db():
     global db_initialized
     if not db_initialized:
-        db_initialized = initialize_database()
+        initialize_database()
+        db_initialized = True
 
 
 # ========== MAIN ROUTES ==========
@@ -664,8 +666,13 @@ def my_mentors():
     if current_user.role != 'student':
         abort(403)
     
-    mentors = User.query.filter_by(department=current_user.department, role='staff').all()
-    return render_template('my_mentors.html', mentors=mentors, department=current_user.department)
+    assignments = StudentStaffAssignment.query.filter_by(student_id=current_user.id).all()
+    mentor_map = {}
+    for assignment in assignments:
+        if assignment.staff and assignment.staff.id not in mentor_map:
+            mentor_map[assignment.staff.id] = assignment.staff
+    mentors = list(mentor_map.values())
+    return render_template('my_mentors.html', mentors=mentors, assignments=assignments, department=current_user.department)
 
 
 @app.route('/mentor/students')
@@ -899,12 +906,16 @@ def new_complaint():
         return redirect(url_for('dashboard'))
     
     form = ComplaintForm()
-    
-    department_staff = User.query.filter_by(department=current_user.department, role='staff').all()
-    form.mentor_id.choices = [(0, '-- Select a Mentor (Optional) --')] + [(s.id, f"{s.username} ({s.email})") for s in department_staff]
+    assigned_mentor = get_primary_assigned_mentor(current_user)
+    if assigned_mentor:
+        form.mentor_id.choices = [(assigned_mentor.id, f"{assigned_mentor.username} ({assigned_mentor.email})")]
+        form.mentor_id.data = assigned_mentor.id
+    else:
+        form.mentor_id.choices = [(0, '-- No Mentor Assigned --')]
+        form.mentor_id.data = 0
     
     if form.validate_on_submit():
-        mentor_id = form.mentor_id.data if form.mentor_id.data != 0 else None
+        mentor_id = assigned_mentor.id if assigned_mentor else None
         
         complaint = Complaint(
             complaint_id=generate_complaint_id(),
@@ -960,7 +971,7 @@ Thank you
         flash('Your complaint has been submitted!', 'success')
         return redirect(url_for('view_complaints'))
     
-    return render_template('create_complaint.html', form=form)
+    return render_template('create_complaint.html', form=form, assigned_mentor=assigned_mentor)
 
 
 @app.route('/complaints')
@@ -981,9 +992,8 @@ def view_complaints():
         )
 
     elif current_user.role in ['staff', 'mentor']:
-        # staff & mentor can see department complaints
-        query = Complaint.query.join(User, Complaint.user_id == User.id).filter(
-            User.department == current_user.department
+        query = Complaint.query.filter(
+            (Complaint.assigned_to == current_user.id) | (Complaint.mentor_id == current_user.id)
         )
 
     else:  # student
@@ -1225,7 +1235,7 @@ def delete_complaint(complaint_id):
 @app.route('/api/complaint/<int:complaint_id>/status', methods=['POST'])
 @login_required
 def api_update_status(complaint_id):
-    if current_user.role != 'staff':
+    if current_user.role not in ['staff', 'mentor']:
         return jsonify({'error': 'Unauthorized'}), 403
     
     complaint = get_complaint_or_404(complaint_id)

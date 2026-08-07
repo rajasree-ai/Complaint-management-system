@@ -6,12 +6,23 @@
         <div class="card">
             <div class="card-header">
                 <h4 class="mb-0">Register New Complaint</h4>
-                <small class="text-muted">You can optionally assign your complaint to a specific mentor</small>
+                <small class="text-muted">Your assigned mentor will be attached automatically.</small>
             </div>
             <div class="card-body">
                 <form method="POST" action="">
                     {{ form.hidden_tag() }}
                     
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Student Name</label>
+                            <input type="text" class="form-control" value="{{ current_user.username }}" readonly>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Student Email</label>
+                            <input type="email" class="form-control" value="{{ current_user.email }}" readonly>
+                        </div>
+                    </div>
+
                     <div class="mb-3">
                         {{ form.title.label(class="form-label") }}
                         {% if form.title.errors %}
@@ -37,12 +48,20 @@
                             <small class="text-muted">Select priority based on urgency</small>
                         </div>
                     </div>
-                    
-                    <div class="mb-3">
-                        {{ form.mentor_id.label(class="form-label") }}
-                        {{ form.mentor_id(class="form-select") }}
-                        <small class="text-muted">Choose a mentor to handle your complaint (optional)</small>
-                    </div>
+
+                    {% if assigned_mentor %}
+                        <div class="mb-3">
+                            <label class="form-label">Assigned Mentor</label>
+                            <input type="text" class="form-control" value="{{ assigned_mentor.username }} ({{ assigned_mentor.email }})" readonly>
+                            <small class="text-muted">Your mentor has been assigned automatically and cannot be changed here.</small>
+                        </div>
+                        {{ form.mentor_id(class="form-select d-none") }}
+                    {% else %}
+                        <div class="alert alert-warning">
+                            <strong>No mentor assigned yet.</strong> Your complaint will still be submitted and assigned by your department.
+                        </div>
+                        {{ form.mentor_id(class="form-select d-none") }}
+                    {% endif %}
                     
                     <div class="mb-3">
                         {{ form.description.label(class="form-label") }}
