@@ -402,7 +402,11 @@ def startup_db():
 @app.route('/')
 def index():
     return redirect(url_for('login'))
-
+@app.route('/users')
+@login_required
+def users():
+    users = User.query.all()
+    return render_template('users.html', users=users)
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -869,16 +873,18 @@ def mentor_delete_student(student_id):
         username = student.username
         
         # Delete all student-staff assignments for this student
-        StudentStaffAssignment.query.filter_by(student_id=student.id).delete()
+        StudentStaffAssignment.query.filter_by(student_id=student.id).delete(synchronize_session=False)
+        db.session.flush()
         
         # Delete all notifications related to this student
-        Notification.query.filter_by(user_id=student.id).delete()
+        Notification.query.filter_by(user_id=student.id).delete(synchronize_session=False)
         
         # Delete all comments by this student
-        Comment.query.filter_by(user_id=student.id).delete()
+        Comment.query.filter_by(user_id=student.id).delete(synchronize_session=False)
         
         # Delete all complaints by this student (already checked but just in case)
-        Complaint.query.filter_by(user_id=student.id).delete()
+        Complaint.query.filter_by(user_id=student.id).delete(synchronize_session=False)
+        db.session.flush()
         
         # Delete the student
         db.session.delete(student)
@@ -1333,15 +1339,17 @@ def department_delete_user(user_id):
     
     try:
         # Delete all student-staff assignments for this user
-        StudentStaffAssignment.query.filter_by(student_id=user.id).delete()
-        StudentStaffAssignment.query.filter_by(staff_id=user.id).delete()
+        StudentStaffAssignment.query.filter_by(student_id=user.id).delete(synchronize_session=False)
+        StudentStaffAssignment.query.filter_by(staff_id=user.id).delete(synchronize_session=False)
+        db.session.flush()
         
         # Delete all notifications related to this user
-        Notification.query.filter_by(user_id=user.id).delete()
-        Comment.query.filter_by(user_id=user.id).delete()
-        Complaint.query.filter_by(assigned_to=user.id).update({'assigned_to': None})
-        Complaint.query.filter_by(mentor_id=user.id).update({'mentor_id': None})
-        Complaint.query.filter_by(user_id=user.id).delete()
+        Notification.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        Comment.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        Complaint.query.filter_by(assigned_to=user.id).update({'assigned_to': None}, synchronize_session=False)
+        Complaint.query.filter_by(mentor_id=user.id).update({'mentor_id': None}, synchronize_session=False)
+        Complaint.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        db.session.flush()
         db.session.delete(user)
         db.session.commit()
         
@@ -1403,11 +1411,15 @@ def delete_staff(staff_id):
         return redirect(url_for('manage_staff'))
     
     try:
-        Notification.query.filter_by(user_id=staff.id).delete()
-        Comment.query.filter_by(user_id=staff.id).delete()
-        Complaint.query.filter_by(assigned_to=staff.id).update({'assigned_to': None})
-        Complaint.query.filter_by(mentor_id=staff.id).update({'mentor_id': None})
-        Complaint.query.filter_by(user_id=staff.id).delete()
+        StudentStaffAssignment.query.filter_by(student_id=staff.id).delete(synchronize_session=False)
+        StudentStaffAssignment.query.filter_by(staff_id=staff.id).delete(synchronize_session=False)
+        db.session.flush()
+        Notification.query.filter_by(user_id=staff.id).delete(synchronize_session=False)
+        Comment.query.filter_by(user_id=staff.id).delete(synchronize_session=False)
+        Complaint.query.filter_by(assigned_to=staff.id).update({'assigned_to': None}, synchronize_session=False)
+        Complaint.query.filter_by(mentor_id=staff.id).update({'mentor_id': None}, synchronize_session=False)
+        Complaint.query.filter_by(user_id=staff.id).delete(synchronize_session=False)
+        db.session.flush()
         db.session.delete(staff)
         db.session.commit()
         

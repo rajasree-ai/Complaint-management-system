@@ -118,8 +118,16 @@ class StudentStaffAssignment(db.Model):
     notes = db.Column(db.Text, nullable=True)
     
     # Relationships
-    student = db.relationship('User', foreign_keys=[student_id], backref='staff_assignments')
-    staff = db.relationship('User', foreign_keys=[staff_id], backref='assigned_students')
+    student = db.relationship(
+        'User',
+        foreign_keys=[student_id],
+        backref=db.backref('staff_assignments', passive_deletes=True, cascade='all, delete-orphan')
+    )
+    staff = db.relationship(
+        'User',
+        foreign_keys=[staff_id],
+        backref=db.backref('assigned_students', passive_deletes=True, cascade='all, delete-orphan')
+    )
     
     # Ensure one staff member is assigned to one student only once per department
     __table_args__ = (db.UniqueConstraint('student_id', 'staff_id', 'department', name='unique_student_staff_dept'),)
