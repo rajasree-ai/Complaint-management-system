@@ -1,18 +1,55 @@
-# Secrets
+# Secrets & Environment Variables
 .env
+.env.*
+!.env.example
+!.env.development.example
+!.env.production.example
+.env.local
+.env.production
+.env.test
 config.py
 add_admin.py
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+service-account*.json
+secrets.json
+
+# Database files (may contain sensitive data)
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sql
+
+# Local environment configuration
+instance/
+.venv/
+venv/
+env/
+ENV/
+
+# Logs & runtime artifacts
+*.log
+uploads/
 
 # Python
 __pycache__/
 *.pyc
-venv/
 
 # VS Code
 .vscode/
+.idea/
 
 # OS
 .DS_Store
+
+# Node modules (qr/ sub-project)
+node_modules/
+.env.npmrc
 
 # Local cleanup artifacts
 _history_cleanup
