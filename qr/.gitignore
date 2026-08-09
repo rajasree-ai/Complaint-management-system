@@ -1,9 +1,0 @@
-node_modules/
-backend/uploads/
-frontend/node_modules/
-.env
-.env.*
-!.env.example
-*.log
-tmp-test.pdf
-backend/tmp-test.pdf
