@@ -1,7 +1,8 @@
 from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField, TextAreaField, SelectField, SubmitField, SelectMultipleField
 from wtforms.validators import DataRequired, Email, EqualTo, Length, ValidationError
-from models import User, Department
+from database import db
+from models import User, Department, StudentStaffAssignment
 
 
 class RegistrationForm(FlaskForm):
@@ -123,8 +124,13 @@ class StudentStaffAssignmentForm(FlaskForm):
         staff_list = User.query.filter_by(department=department_name, role='staff').all()
         self.staff_member.choices = [(0, 'Select Staff Member')] + [(s.id, f"{s.username} ({s.email})") for s in staff_list]
         
-        # Get students in the department
-        student_list = User.query.filter_by(department=department_name, role='student').all()
+        # Only show students who are not already assigned in this department.
+        assigned_student_ids = db.session.query(StudentStaffAssignment.student_id).filter(
+            StudentStaffAssignment.department == department_name
+        ).distinct()
+        student_list = User.query.filter_by(department=department_name, role='student').filter(
+            ~User.id.in_(assigned_student_ids)
+        ).all()
         self.students.choices = [(st.id, f"{st.username} - {st.year} {st.section}") for st in student_list]
 
 
@@ -139,8 +145,13 @@ class StaffStudentAssignmentForm(FlaskForm):
     
     def __init__(self, department_name, *args, **kwargs):
         super(StaffStudentAssignmentForm, self).__init__(*args, **kwargs)
-        # Get students in the department
-        student_list = User.query.filter_by(department=department_name, role='student').all()
+        # Only show students who are not already assigned in this department.
+        assigned_student_ids = db.session.query(StudentStaffAssignment.student_id).filter(
+            StudentStaffAssignment.department == department_name
+        ).distinct()
+        student_list = User.query.filter_by(department=department_name, role='student').filter(
+            ~User.id.in_(assigned_student_ids)
+        ).all()
         self.students.choices = [(st.id, f"{st.username} - {st.year} {st.section}") for st in student_list]
 
 

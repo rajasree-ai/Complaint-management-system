@@ -129,5 +129,8 @@ class StudentStaffAssignment(db.Model):
         backref=db.backref('assigned_students', passive_deletes=True, cascade='all, delete-orphan')
     )
     
-    # Ensure one staff member is assigned to one student only once per department
-    __table_args__ = (db.UniqueConstraint('student_id', 'staff_id', 'department', name='unique_student_staff_dept'),)
+    # Ensure a student can only be assigned once per department, regardless of staff member.
+    __table_args__ = (
+        db.UniqueConstraint('student_id', 'staff_id', 'department', name='unique_student_staff_dept'),
+        db.UniqueConstraint('student_id', 'department', name='unique_student_department')
+    )

@@ -28,7 +28,7 @@ from utils import (
     send_comment_notification, send_status_update_email, generate_otp, 
     send_otp_email, get_hod_department, utc_to_local
 )
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, text, func
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -105,6 +105,14 @@ def is_department_admin(user):
 def get_user_department(user):
     """Get the department a user belongs to"""
     return user.department
+
+
+def get_assigned_student_ids(department_name):
+    """Return the student IDs that already have an assignment in a department."""
+    assigned_rows = db.session.query(StudentStaffAssignment.student_id).filter(
+        StudentStaffAssignment.department == department_name
+    ).distinct().all()
+    return {student_id for (student_id,) in assigned_rows}
 
 
 def get_department_complaints(department_name):
@@ -334,7 +342,7 @@ def initialize_database():
     try:
         with app.app_context():
             db.create_all()
-
+            
             # Ensure legacy SQLite databases get the missing mentor_id column
             inspector = inspect(db.engine)
             if 'complaint' in inspector.get_table_names():
@@ -343,6 +351,37 @@ def initialize_database():
                     with db.engine.begin() as connection:
                         connection.execute(text('ALTER TABLE complaint ADD COLUMN mentor_id INTEGER'))
                     print('Added missing mentor_id column to complaint table')
+
+            if 'student_staff_assignment' in inspector.get_table_names():
+                duplicate_groups = (
+                    db.session.query(
+                        StudentStaffAssignment.student_id,
+                        StudentStaffAssignment.department,
+                        func.min(StudentStaffAssignment.id).label('keep_id')
+                    )
+                    .group_by(StudentStaffAssignment.student_id, StudentStaffAssignment.department)
+                    .having(func.count(StudentStaffAssignment.id) > 1)
+                    .all()
+                )
+
+                if duplicate_groups:
+                    for student_id, department_name, keep_id in duplicate_groups:
+                        stale_assignments = StudentStaffAssignment.query.filter(
+                            StudentStaffAssignment.student_id == student_id,
+                            StudentStaffAssignment.department == department_name,
+                            StudentStaffAssignment.id != keep_id
+                        ).all()
+                        for assignment in stale_assignments:
+                            db.session.delete(assignment)
+                    db.session.commit()
+                    print('Cleaned up duplicate student assignments')
+
+                with db.engine.begin() as connection:
+                    connection.execute(text(
+                        'CREATE UNIQUE INDEX IF NOT EXISTS ix_student_staff_assignment_unique_student_department '
+                        'ON student_staff_assignment (student_id, department)'
+                    ))
+                print('Ensured student assignment uniqueness index exists')
 
             super_admin = User.query.filter_by(email='vanitha.sty3375@gmail.com').first()
             if not super_admin:
@@ -1491,6 +1530,35 @@ Thank you
     return render_template('add_department_staff.html', department=current_user.department)
 
 
+@app.route('/assign-students')
+@login_required
+def assign_students():
+    """HOD can assign students to department staff members."""
+    if not is_department_admin(current_user):
+        abort(403)
+
+    form = StudentStaffAssignmentForm(current_user.department)
+
+    staff_members = User.query.filter_by(department=current_user.department, role='staff').all()
+    staff_assignments = {}
+    for staff in staff_members:
+        assignments = StudentStaffAssignment.query.filter_by(
+            staff_id=staff.id,
+            department=current_user.department
+        ).all()
+        if assignments:
+            staff_assignments[staff.id] = {
+                'staff': staff,
+                'students': [
+                    {'student': assignment.student, 'assignment': assignment}
+                    for assignment in assignments
+                    if assignment.student
+                ]
+            }
+
+    return render_template('assign_students.html', form=form, staff_assignments=staff_assignments)
+
+
 @app.route('/staff/my-assigned-students')
 @login_required
 def my_assigned_students():
@@ -1553,31 +1621,50 @@ def staff_submit_assignment():
         notes = form.notes.data
         
         try:
+            assigned_student_ids = get_assigned_student_ids(current_user.department)
+            created_assignments = 0
+            skipped_students = []
+
             # Add assignments
             for student_id in student_ids:
                 student = User.query.filter_by(id=student_id, department=current_user.department, role='student').first()
                 if not student:
                     continue
-                
-                # Check if assignment already exists
+
+                if student.id in assigned_student_ids:
+                    skipped_students.append(student.username)
+                    continue
+
                 existing = StudentStaffAssignment.query.filter_by(
-                    student_id=student_id, 
-                    staff_id=current_user.id, 
+                    student_id=student.id,
                     department=current_user.department
                 ).first()
-                
-                if not existing:
-                    assignment = StudentStaffAssignment(
-                        student_id=student_id,
-                        staff_id=current_user.id,
-                        department=current_user.department,
-                        notes=notes
-                    )
-                    db.session.add(assignment)
-            
+
+                if existing:
+                    skipped_students.append(student.username)
+                    continue
+
+                assignment = StudentStaffAssignment(
+                    student_id=student.id,
+                    staff_id=current_user.id,
+                    department=current_user.department,
+                    notes=notes
+                )
+                db.session.add(assignment)
+                assigned_student_ids.add(student.id)
+                created_assignments += 1
+
             db.session.commit()
-            flash(f'Successfully assigned {len(student_ids)} student(s) to yourself', 'success')
-        
+            if created_assignments > 0:
+                if skipped_students:
+                    flash(f'Successfully assigned {created_assignments} student(s) to yourself. {len(skipped_students)} already-assigned student(s) were skipped.', 'warning')
+                else:
+                    flash(f'Successfully assigned {created_assignments} student(s) to yourself', 'success')
+            elif skipped_students:
+                flash('The selected students were already assigned and were not added.', 'warning')
+            else:
+                flash('No valid students were selected for assignment.', 'warning')
+
         except IntegrityError as e:
             db.session.rollback()
             flash('One or more students were already assigned to you', 'warning')
@@ -1613,31 +1700,50 @@ def submit_student_assignment():
             return redirect(url_for('assign_students'))
         
         try:
+            assigned_student_ids = get_assigned_student_ids(current_user.department)
+            created_assignments = 0
+            skipped_students = []
+
             # Add assignments
             for student_id in student_ids:
                 student = User.query.filter_by(id=student_id, department=current_user.department, role='student').first()
                 if not student:
                     continue
-                
-                # Check if assignment already exists
+
+                if student.id in assigned_student_ids:
+                    skipped_students.append(student.username)
+                    continue
+
                 existing = StudentStaffAssignment.query.filter_by(
-                    student_id=student_id, 
-                    staff_id=staff_id, 
+                    student_id=student.id,
                     department=current_user.department
                 ).first()
-                
-                if not existing:
-                    assignment = StudentStaffAssignment(
-                        student_id=student_id,
-                        staff_id=staff_id,
-                        department=current_user.department,
-                        notes=notes
-                    )
-                    db.session.add(assignment)
-            
+
+                if existing:
+                    skipped_students.append(student.username)
+                    continue
+
+                assignment = StudentStaffAssignment(
+                    student_id=student.id,
+                    staff_id=staff_id,
+                    department=current_user.department,
+                    notes=notes
+                )
+                db.session.add(assignment)
+                assigned_student_ids.add(student.id)
+                created_assignments += 1
+
             db.session.commit()
-            flash(f'Successfully assigned {len(student_ids)} student(s) to {staff.username}', 'success')
-        
+            if created_assignments > 0:
+                if skipped_students:
+                    flash(f'Successfully assigned {created_assignments} student(s) to {staff.username}. {len(skipped_students)} already-assigned student(s) were skipped.', 'warning')
+                else:
+                    flash(f'Successfully assigned {created_assignments} student(s) to {staff.username}', 'success')
+            elif skipped_students:
+                flash('The selected students were already assigned and were not added.', 'warning')
+            else:
+                flash('No valid students were selected for assignment.', 'warning')
+
         except IntegrityError as e:
             db.session.rollback()
             flash('One or more students were already assigned to this staff member', 'warning')
