@@ -8,7 +8,7 @@ import sys
 import os
 from urllib.parse import urlparse
 from dotenv import load_dotenv
-
+from flask_mail import Mail, Message
 # Load environment variables from .env for local development
 load_dotenv()
 
@@ -23,10 +23,18 @@ from forms import (
     RemoveStudentAssignmentForm, StaffStudentAssignmentForm, UpdateProfileForm
 )
 from utils import (
-    generate_complaint_id, send_email_notification, create_notification, 
-    calculate_complaint_stats, send_complaint_registration_email,
-    send_comment_notification, send_status_update_email, generate_otp, 
-    send_otp_email, get_hod_department, utc_to_local
+    generate_complaint_id,
+    send_email_notification,
+    send_complaint_registration_email,
+    send_comment_notification,
+    send_status_update_email,
+    send_otp_email,
+    send_csv_imported_student_email,
+    generate_otp,
+    create_notification,
+    calculate_complaint_stats,
+    get_hod_department,
+    utc_to_local
 )
 from sqlalchemy import inspect, text, func
 
@@ -569,6 +577,7 @@ You can now:
 Please login and change your password for security.
 
 Thank you
+Grievance Hub
 '''
         send_email_notification(email, subject, body)
         
@@ -640,7 +649,74 @@ def super_admin_dashboard():
                          recent_complaints=recent_complaints,
                          departments=departments)
 
+@app.route('/admin/send-imported-student-emails', methods=['POST'])
+@login_required
+def send_imported_student_emails():
 
+    # Only Super Admin can send imported student emails
+    if not is_super_admin(current_user):
+        abort(403)
+
+    try:
+        # Get students imported from CSV who have not received
+        # their welcome email yet.
+        students = User.query.filter(
+            User.role == 'student',
+            User.email.isnot(None),
+            User.email != '',
+            User.email_sent == False
+        ).all()
+
+        total_students = len(students)
+        sent_count = 0
+        failed_count = 0
+
+        print(
+            f"📧 Found {total_students} students "
+            f"waiting for welcome email."
+        )
+
+        for student in students:
+
+            success = send_csv_imported_student_email(student)
+
+            if success:
+                student.email_sent = True
+                sent_count += 1
+            else:
+                failed_count += 1
+
+            # Commit after every student so that if one email fails,
+            # already-sent students are not sent again.
+            try:
+                db.session.commit()
+            except Exception as db_error:
+                db.session.rollback()
+                print(
+                    f"❌ Database update failed for "
+                    f"{student.username}: {db_error}"
+                )
+
+        flash(
+            f'Email process completed. '
+            f'Sent: {sent_count}, Failed: {failed_count}.',
+            'success' if failed_count == 0 else 'warning'
+        )
+
+    except Exception as e:
+
+        db.session.rollback()
+
+        print(
+            f"❌ Error while sending imported student emails: {e}"
+        )
+
+        flash(
+            f'Error sending student emails: {str(e)}',
+            'danger'
+        )
+
+    return redirect(url_for('super_admin_dashboard'))
 # ========== HOD DASHBOARD ==========
 
 @app.route('/hod/dashboard')

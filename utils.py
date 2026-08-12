@@ -73,7 +73,7 @@ Date: {complaint.created_at.strftime('%Y-%m-%d %H:%M')}
 You can track your complaint status at your dashboard.
 
 Thank you,
-Complaint Management System
+Grievance Hub
 '''
     return send_email_notification(complaint.author.email, subject, body, mail)
 
@@ -97,7 +97,7 @@ Date: {comment.created_at.strftime('%Y-%m-%d %H:%M')}
 View your complaint in your dashboard.
 
 Thank you,
-Complaint Management System
+Grievance Hub
 '''
     return send_email_notification(recipient_user.email, subject, body, mail)
 
@@ -119,7 +119,7 @@ Updated Date: {complaint.updated_at.strftime('%Y-%m-%d %H:%M')}
 View your complaint in your dashboard.
 
 Thank you,
-Complaint Management System
+Grievance Hub
 '''
     return send_email_notification(complaint.author.email, subject, body, mail)
 
@@ -135,7 +135,7 @@ def send_otp_email(email, otp, mail=None):
     body = f'''
 Dear User,
 
-You requested to reset your password for the Complaint Management System.
+You requested to reset your password for the Grievance Hub.
 
 Your OTP is: {otp}
 
@@ -144,7 +144,7 @@ This OTP is valid for 10 minutes.
 If you did not request this, please ignore this email.
 
 Thank you,
-Complaint Management System
+Grievance Hub
 '''
     return send_email_notification(email, subject, body, mail)
 
@@ -216,3 +216,67 @@ def get_department_hod(department_name):
     """Get HOD of a department"""
     department = Department.query.filter_by(name=department_name).first()
     return User.query.get(department.hod_id) if department else None
+def send_csv_imported_student_email(student):
+    """
+    Send welcome email to a student imported through CSV/Supabase.
+    Returns True if email was sent successfully.
+    """
+
+    if not student.email:
+        print(f"❌ No email address for student: {student.username}")
+        return False
+
+    subject = 'Welcome to Grievance Hub - Student Account'
+
+    body = f'''
+Dear {student.username},
+
+Welcome to the Grievance Hub!
+
+Your student account has been successfully created.
+
+Account Details:
+----------------
+Username: {student.username}
+Email: {student.email}
+Department: {student.department or 'Not specified'}
+
+You can now login to the Grievance Hub and:
+- Register complaints
+- Track complaint status
+- View your assigned mentor
+- Receive complaint notifications
+
+If you have not set your password yet, please use the
+"Forgot Password" option on the login page to create your password.
+
+Thank you,
+Grievance Hub
+'''
+
+    try:
+        success = send_email_notification(
+            student.email,
+            subject,
+            body
+        )
+
+        if success:
+            print(
+                f"✅ Welcome email sent to "
+                f"{student.username} ({student.email})"
+            )
+            return True
+
+        print(
+            f"❌ Failed to send welcome email to "
+            f"{student.username} ({student.email})"
+        )
+        return False
+
+    except Exception as e:
+        print(
+            f"❌ Error sending welcome email to "
+            f"{student.username}: {e}"
+        )
+        return False
