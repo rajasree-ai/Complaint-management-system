@@ -496,6 +496,7 @@ Department: {user.department}
 You can now register complaints and track their status.
 
 Thank you
+Grievance Hub
 '''
         send_email_notification(user.email, subject, body)
         
@@ -1077,6 +1078,7 @@ Priority: {complaint.priority}
 Please review and take appropriate action.
 
 Thank you
+Grievance Hub
 '''
                 send_email_notification(mentor.email, mentor_subject, mentor_body)
         
@@ -1879,9 +1881,17 @@ def remove_student_assignment(assignment_id):
 def super_admin_users():
     if not is_super_admin(current_user):
         abort(403)
-    users = User.query.all()
-    return render_template('super_admin_users.html', users=users)
-
+    users = User.query.order_by(User.id).all()
+    students = User.query.filter_by(role='student').order_by(User.id).all()
+    staff = User.query.filter(User.role.in_(['staff', 'mentor'])).order_by(User.id).all()
+    others = User.query.filter(~User.role.in_(['student', 'staff', 'mentor'])).order_by(User.id).all()
+    return render_template(
+        'super_admin_users.html',
+        users=users,
+        students=students,
+        staff=staff,
+        others=others
+    )
 
 @app.route('/admin/user/<int:user_id>/change-role/<string:role>')
 @login_required

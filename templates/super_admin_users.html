@@ -13,83 +13,126 @@
     </div>
 </div>
 
+{% macro user_table(user_list) %}
+<div class="table-responsive">
+    <table class="table table-hover">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Username</th>
+                <th>Email</th>
+                <th>Department</th>
+                <th>Role</th>
+                <th>Year/Section</th>
+                <th>Complaints</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for user in user_list %}
+            <tr>
+                <td>{{ user.id }}</td>
+                <td>
+                    <i class="fas fa-user-circle me-1"></i>
+                    {{ user.username }}
+                    {% if user.id == current_user.id %}
+                        <span class="badge bg-primary">You</span>
+                    {% endif %}
+                </td>
+                <td>{{ user.email }}</td>
+                <td>{{ user.department or 'N/A' }}</td>
+                <td>
+                    {% if user.role == 'admin' %}
+                        <span class="badge bg-danger"><i class="fas fa-crown me-1"></i>Super Admin</span>
+                    {% elif user.role == 'hod' %}
+                        <span class="badge bg-warning text-dark"><i class="fas fa-chalkboard-teacher me-1"></i>HOD</span>
+                    {% elif user.role == 'staff' %}
+                        <span class="badge bg-success"><i class="fas fa-user-tie me-1"></i>Staff</span>
+                    {% elif user.role == 'mentor' %}
+                        <span class="badge bg-success"><i class="fas fa-user-tie me-1"></i>Mentor</span>
+                    {% else %}
+                        <span class="badge bg-info"><i class="fas fa-user-graduate me-1"></i>Student</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if user.year and user.section %}
+                        {{ user.year }}, Sec {{ user.section }}
+                    {% else %}
+                        -
+                    {% endif %}
+                </td>
+                <td><span class="badge bg-primary">{{ user.complaints|length }}</span></td>
+                <td>
+                    {% if user.id != current_user.id %}
+                        <div class="btn-group" role="group">
+                            <button type="button" class="btn btn-sm btn-warning dropdown-toggle" data-bs-toggle="dropdown">
+                                Change Role
+                            </button>
+                            <ul class="dropdown-menu">
+                                <li><a class="dropdown-item" href="{{ url_for('super_admin_change_user_role', user_id=user.id, role='student') }}">Student</a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('super_admin_change_user_role', user_id=user.id, role='staff') }}">Staff</a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('super_admin_change_user_role', user_id=user.id, role='hod') }}">HOD</a></li>
+                            </ul>
+                            <form method="POST" action="{{ url_for('super_admin_delete_user', user_id=user.id) }}"
+                                  style="display: inline;"
+                                  onsubmit="return confirm('Delete this user?')">
+                                <button type="submit" class="btn btn-sm btn-danger ms-1">
+                                    <i class="fas fa-trash-alt"></i>
+                                </button>
+                            </form>
+                        </div>
+                    {% else %}
+                        <span class="text-muted">Current User</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            {% if not user_list %}
+            <tr>
+                <td colspan="8" class="text-center text-muted py-4">No users in this category.</td>
+            </tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+{% endmacro %}
+
 <div class="row">
     <div class="col-12">
         <div class="card">
+            <div class="card-header">
+                <ul class="nav nav-tabs card-header-tabs" id="userTabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="students-tab" data-bs-toggle="tab" data-bs-target="#students-pane" type="button" role="tab">
+                            <i class="fas fa-user-graduate me-1"></i>Students
+                            <span class="badge bg-info ms-1">{{ students|length }}</span>
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="staff-tab" data-bs-toggle="tab" data-bs-target="#staff-pane" type="button" role="tab">
+                            <i class="fas fa-user-tie me-1"></i>Staff
+                            <span class="badge bg-success ms-1">{{ staff|length }}</span>
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="others-tab" data-bs-toggle="tab" data-bs-target="#others-pane" type="button" role="tab">
+                            <i class="fas fa-user-shield me-1"></i>Admin / HOD
+                            <span class="badge bg-danger ms-1">{{ others|length }}</span>
+                        </button>
+                    </li>
+                </ul>
+            </div>
             <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>Username</th>
-                                <th>Email</th>
-                                <th>Department</th>
-                                <th>Role</th>
-                                <th>Year/Section</th>
-                                <th>Complaints</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for user in users %}
-                            <tr>
-                                <td>{{ user.id }}</td>
-                                <td>
-                                    <i class="fas fa-user-circle me-1"></i>
-                                    {{ user.username }}
-                                    {% if user.id == current_user.id %}
-                                        <span class="badge bg-primary">You</span>
-                                    {% endif %}
-                                </td>
-                                <td>{{ user.email }}</td>
-                                <td>{{ user.department or 'N/A' }}</td>
-                                <td>
-                                    {% if user.role == 'admin' %}
-                                        <span class="badge bg-danger"><i class="fas fa-crown me-1"></i>Super Admin</span>
-                                    {% elif user.role == 'hod' %}
-                                        <span class="badge bg-warning text-dark"><i class="fas fa-chalkboard-teacher me-1"></i>HOD</span>
-                                    {% elif user.role == 'staff' %}
-                                        <span class="badge bg-success"><i class="fas fa-user-tie me-1"></i>Staff</span>
-                                    {% else %}
-                                        <span class="badge bg-info"><i class="fas fa-user-graduate me-1"></i>Student</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    {% if user.year and user.section %}
-                                        {{ user.year }}, Sec {{ user.section }}
-                                    {% else %}
-                                        -
-                                    {% endif %}
-                                </td>
-                                <td><span class="badge bg-primary">{{ user.complaints|length }}</span></td>
-                                <td>
-                                    {% if user.id != current_user.id %}
-                                        <div class="btn-group" role="group">
-                                            <button type="button" class="btn btn-sm btn-warning dropdown-toggle" data-bs-toggle="dropdown">
-                                                Change Role
-                                            </button>
-                                            <ul class="dropdown-menu">
-                                                <li><a class="dropdown-item" href="{{ url_for('super_admin_change_user_role', user_id=user.id, role='student') }}">Student</a></li>
-                                                <li><a class="dropdown-item" href="{{ url_for('super_admin_change_user_role', user_id=user.id, role='staff') }}">Staff</a></li>
-                                                <li><a class="dropdown-item" href="{{ url_for('super_admin_change_user_role', user_id=user.id, role='hod') }}">HOD</a></li>
-                                            </ul>
-                                            <form method="POST" action="{{ url_for('super_admin_delete_user', user_id=user.id) }}" 
-                                                  style="display: inline;" 
-                                                  onsubmit="return confirm('Delete this user?')">
-                                                <button type="submit" class="btn btn-sm btn-danger ms-1">
-                                                    <i class="fas fa-trash-alt"></i>
-                                                </button>
-                                            </form>
-                                        </div>
-                                    {% else %}
-                                        <span class="text-muted">Current User</span>
-                                    {% endif %}
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
+                <div class="tab-content" id="userTabsContent">
+                    <div class="tab-pane fade show active" id="students-pane" role="tabpanel">
+                        {{ user_table(students) }}
+                    </div>
+                    <div class="tab-pane fade" id="staff-pane" role="tabpanel">
+                        {{ user_table(staff) }}
+                    </div>
+                    <div class="tab-pane fade" id="others-pane" role="tabpanel">
+                        {{ user_table(others) }}
+                    </div>
                 </div>
             </div>
         </div>
