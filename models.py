@@ -15,6 +15,7 @@ class User(UserMixin, db.Model):
     department = db.Column(db.String(100))
     year = db.Column(db.String(20))
     section = db.Column(db.String(10))
+    roll_number = db.Column(db.String(20), nullable=True)
     parent_name = db.Column(db.String(100))
     parent_phone = db.Column(db.String(15))
     address = db.Column(db.Text)

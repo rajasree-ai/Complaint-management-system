@@ -34,6 +34,7 @@
                         {% endif %}
                     </p>
                     <p><strong>Department:</strong> {{ user.department or 'Not specified' }}</p>
+                    <p><strong>Roll Number:</strong> {{ user.roll_number or '-' }}</p>
                     <p><strong>Member since:</strong> {{ user.created_at.strftime('%d-%m-%Y') }}</p>
                     <p><strong>Total Complaints:</strong> {{ user.complaints|length }}</p>
                 </div>

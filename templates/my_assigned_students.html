@@ -98,6 +98,7 @@
                                 <thead class="table-light">
                                     <tr>
                                         <th>Student Name</th>
+                                        <th>Roll No</th>
                                         <th>Email</th>
                                         <th>Year/Section</th>
                                         <th>Contact</th>
@@ -111,6 +112,9 @@
                                     <tr>
                                         <td>
                                             <strong>{{ item['student'].username }}</strong>
+                                        </td>
+                                        <td>
+                                            {{ item['student'].roll_number or '-' }}
                                         </td>
                                         <td>
                                             {{ item['student'].email }}
@@ -169,6 +173,9 @@
                     <div class="card-body">
                         <p class="mb-2">
                             <strong>Email:</strong> {{ item['student'].email }}
+                        </p>
+                        <p class="mb-2">
+                            <strong>Roll No:</strong> {{ item['student'].roll_number or 'N/A' }}
                         </p>
                         <p class="mb-2">
                             <strong>Year/Section:</strong> {{ item['student'].year }} {{ item['student'].section }}

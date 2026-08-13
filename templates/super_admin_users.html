@@ -13,12 +13,15 @@
     </div>
 </div>
 
-{% macro user_table(user_list) %}
+{% macro user_table(user_list, show_roll_number=false) %}
 <div class="table-responsive">
     <table class="table table-hover">
         <thead>
             <tr>
                 <th>ID</th>
+                {% if show_roll_number %}
+                <th>Roll No</th>
+                {% endif %}
                 <th>Username</th>
                 <th>Email</th>
                 <th>Department</th>
@@ -32,6 +35,9 @@
             {% for user in user_list %}
             <tr>
                 <td>{{ user.id }}</td>
+                {% if show_roll_number %}
+                <td>{{ user.roll_number or '-' }}</td>
+                {% endif %}
                 <td>
                     <i class="fas fa-user-circle me-1"></i>
                     {{ user.username }}
@@ -89,7 +95,7 @@
             {% endfor %}
             {% if not user_list %}
             <tr>
-                <td colspan="8" class="text-center text-muted py-4">No users in this category.</td>
+                <td colspan="9" class="text-center text-muted py-4">No users in this category.</td>
             </tr>
             {% endif %}
         </tbody>
@@ -125,7 +131,7 @@
             <div class="card-body">
                 <div class="tab-content" id="userTabsContent">
                     <div class="tab-pane fade show active" id="students-pane" role="tabpanel">
-                        {{ user_table(students) }}
+                        {{ user_table(students, show_roll_number=true) }}
                     </div>
                     <div class="tab-pane fade" id="staff-pane" role="tabpanel">
                         {{ user_table(staff) }}

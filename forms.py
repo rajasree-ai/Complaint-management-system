@@ -24,6 +24,10 @@ class RegistrationForm(FlaskForm):
         ('B', 'B'),
         ('C', 'C')
     ], validators=[DataRequired()])
+
+    # Allow student to enter roll number at registration
+    roll_number = StringField('Roll Number', validators=[DataRequired(), Length(max=20)])
+
     phone = StringField('Phone Number', validators=[DataRequired(), Length(min=10, max=15)])
     parent_name = StringField('Parent/Guardian Name', validators=[DataRequired()])
     parent_phone = StringField('Parent/Guardian Phone', validators=[DataRequired(), Length(min=10, max=15)])
@@ -48,6 +52,14 @@ class RegistrationForm(FlaskForm):
         user = User.query.filter_by(email=email.data).first()
         if user:
             raise ValidationError('Email already registered.')
+
+    def validate_roll_number(self, roll_number):
+        from models import User
+        if not roll_number.data:
+            raise ValidationError('Roll number is required for student accounts.')
+        existing = User.query.filter_by(roll_number=roll_number.data.strip()).first()
+        if existing:
+            raise ValidationError('Roll number already exists.')
 
 class LoginForm(FlaskForm):
     email = StringField('Email', validators=[DataRequired(), Email()])
@@ -131,7 +143,7 @@ class StudentStaffAssignmentForm(FlaskForm):
         student_list = User.query.filter_by(department=department_name, role='student').filter(
             ~User.id.in_(assigned_student_ids)
         ).all()
-        self.students.choices = [(st.id, f"{st.username} - {st.year} {st.section}") for st in student_list]
+        self.students.choices = [(st.id, f"{st.roll_number or '-'} — {st.username} ({st.year} {st.section})") for st in student_list]
 
 
 class RemoveStudentAssignmentForm(FlaskForm):
@@ -152,7 +164,7 @@ class StaffStudentAssignmentForm(FlaskForm):
         student_list = User.query.filter_by(department=department_name, role='student').filter(
             ~User.id.in_(assigned_student_ids)
         ).all()
-        self.students.choices = [(st.id, f"{st.username} - {st.year} {st.section}") for st in student_list]
+        self.students.choices = [(st.id, f"{st.roll_number or '-'} — {st.username} ({st.year} {st.section})") for st in student_list]
 
 
 class UpdateProfileForm(FlaskForm):
@@ -170,11 +182,39 @@ class UpdateProfileForm(FlaskForm):
         ('B', 'B'),
         ('C', 'C')
     ], validators=[DataRequired()])
+
+    # Allow editing roll number on profile updates
+    roll_number = StringField('Roll Number', validators=[Length(max=20)])
+
     phone = StringField('Phone Number', validators=[Length(min=10, max=15)])
     parent_name = StringField('Parent/Guardian Name')
     parent_phone = StringField('Parent/Guardian Phone', validators=[Length(min=10, max=15)])
     address = TextAreaField('Address')
     submit = SubmitField('Save Changes')
+
+    def __init__(self, target_user=None, *args, **kwargs):
+        super(UpdateProfileForm, self).__init__(*args, **kwargs)
+        self.target_user = target_user
+        departments = Department.query.order_by(Department.name).all()
+        self.department.choices = [(d.name, d.name) for d in departments] if departments else [('', 'No departments available')]
+
+    def validate_username(self, username):
+        user = User.query.filter_by(username=username.data).first()
+        if user and (not self.target_user or user.id != self.target_user.id):
+            raise ValidationError('Username already exists.')
+
+    def validate_email(self, email):
+        user = User.query.filter_by(email=email.data).first()
+        if user and (not self.target_user or user.id != self.target_user.id):
+            raise ValidationError('Email already registered.')
+
+    def validate_roll_number(self, roll_number):
+        if not roll_number.data:
+            # Allow empty roll_number for non-students but if provided check uniqueness
+            return
+        existing = User.query.filter_by(roll_number=roll_number.data.strip()).first()
+        if existing and (not self.target_user or existing.id != self.target_user.id):
+            raise ValidationError('Roll number already exists.')
 
     def __init__(self, target_user=None, *args, **kwargs):
         super(UpdateProfileForm, self).__init__(*args, **kwargs)

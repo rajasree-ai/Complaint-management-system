@@ -68,6 +68,7 @@
                         <thead class="table-light">
                             <tr>
                                 <th>ID</th>
+                                <th>Roll No</th>
                                 <th>Name</th>
                                 <th>Email</th>
                                 <th>Phone</th>
@@ -81,6 +82,7 @@
                             {% for student_data in students_list %}
                             <tr>
                                 <td>{{ student_data.user.id }}</td>
+                                <td>{{ student_data.user.roll_number or '-' }}</td>
                                 <td>
                                     <i class="fas fa-user-circle me-2 text-success"></i>
                                     <strong>{{ student_data.user.username }}</strong>

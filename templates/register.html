@@ -53,6 +53,16 @@
                             {{ form.section(class="form-select") }}
                         </div>
                     </div>
+
+                    <div class="row">
+                        <div class="col-md-12 mb-3">
+                            {{ form.roll_number.label(class="form-label") }}
+                            {{ form.roll_number(class="form-control", placeholder="ES24AD001") }}
+                            {% if form.roll_number.errors %}
+                                <div class="text-danger small">{{ form.roll_number.errors[0] }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
                     
                     <div class="row">
                         <div class="col-md-6 mb-3">

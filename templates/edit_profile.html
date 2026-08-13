@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 
 {% block title %}{{ title }}{% endblock %}
 
@@ -51,19 +51,26 @@
 
                         <div class="row g-3 mt-3">
                             <div class="col-md-6">
+                                <label class="form-label" for="roll_number">Roll Number</label>
+                                {{ form.roll_number(class="form-control") }}
+                                {% if form.roll_number.errors %}
+                                    <div class="text-danger small">{{ form.roll_number.errors[0] }}</div>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-6">
                                 <label class="form-label" for="phone">Phone Number</label>
                                 {{ form.phone(class="form-control") }}
                                 {% if form.phone.errors %}
                                     <div class="text-danger small">{{ form.phone.errors[0] }}</div>
                                 {% endif %}
                             </div>
+                        </div>
+
+                        <div class="row g-3 mt-3">
                             <div class="col-md-6">
                                 <label class="form-label" for="parent_name">Parent/Guardian Name</label>
                                 {{ form.parent_name(class="form-control") }}
                             </div>
-                        </div>
-
-                        <div class="row g-3 mt-3">
                             <div class="col-md-6">
                                 <label class="form-label" for="parent_phone">Parent/Guardian Phone</label>
                                 {{ form.parent_phone(class="form-control") }}
@@ -71,7 +78,10 @@
                                     <div class="text-danger small">{{ form.parent_phone.errors[0] }}</div>
                                 {% endif %}
                             </div>
-                            <div class="col-md-6">
+                        </div>
+
+                        <div class="row g-3 mt-3">
+                            <div class="col-md-12">
                                 <label class="form-label" for="address">Address</label>
                                 {{ form.address(class="form-control", rows="3") }}
                             </div>

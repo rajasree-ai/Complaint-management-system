@@ -349,16 +349,23 @@ def initialize_database():
     """Initialize database schema and default data safely."""
     try:
         with app.app_context():
-            db.create_all()
-            
+            # Run create_all but don't fail completely if it errors (e.g., missing auth schema in SQLite).
+            try:
+                db.create_all()
+            except Exception as e:
+                app.logger.exception('db.create_all failed; continuing with best-effort schema fixes')
+
             # Ensure legacy SQLite databases get the missing mentor_id column
             inspector = inspect(db.engine)
             if 'complaint' in inspector.get_table_names():
                 complaint_columns = [column['name'] for column in inspector.get_columns('complaint')]
                 if 'mentor_id' not in complaint_columns:
-                    with db.engine.begin() as connection:
-                        connection.execute(text('ALTER TABLE complaint ADD COLUMN mentor_id INTEGER'))
-                    print('Added missing mentor_id column to complaint table')
+                    try:
+                        with db.engine.begin() as connection:
+                            connection.execute(text('ALTER TABLE complaint ADD COLUMN mentor_id INTEGER'))
+                        print('Added missing mentor_id column to complaint table')
+                    except Exception as e:
+                        app.logger.exception('Could not add mentor_id column to complaint table')
 
             if 'student_staff_assignment' in inspector.get_table_names():
                 duplicate_groups = (
@@ -384,12 +391,32 @@ def initialize_database():
                     db.session.commit()
                     print('Cleaned up duplicate student assignments')
 
-                with db.engine.begin() as connection:
-                    connection.execute(text(
-                        'CREATE UNIQUE INDEX IF NOT EXISTS ix_student_staff_assignment_unique_student_department '
-                        'ON student_staff_assignment (student_id, department)'
-                    ))
-                print('Ensured student assignment uniqueness index exists')
+                try:
+                    with db.engine.begin() as connection:
+                        connection.execute(text(
+                            'CREATE UNIQUE INDEX IF NOT EXISTS ix_student_staff_assignment_unique_student_department '
+                            'ON student_staff_assignment (student_id, department)'
+                        ))
+                    print('Ensured student assignment uniqueness index exists')
+                except Exception:
+                    app.logger.exception('Could not create unique index for student_staff_assignment')
+
+            # Ensure local SQLite user table has the roll_number column (add if missing).
+            try:
+                if 'user' in inspector.get_table_names():
+                    user_columns = [c['name'] for c in inspector.get_columns('user')]
+                    if 'roll_number' not in user_columns:
+                        try:
+                            print('Adding missing roll_number column to user table')
+                            with db.engine.begin() as connection:
+                                # Use a VARCHAR(20) compatible type; SQLite will accept it as TEXT
+                                connection.execute(text('ALTER TABLE "user" ADD COLUMN roll_number VARCHAR(20)'))
+                            print('Added roll_number column to user table')
+                        except Exception as e:
+                            # Log and continue; do not fail initialization because of schema changes
+                            app.logger.exception(f'Could not add roll_number column: {e}')
+            except Exception:
+                app.logger.exception('Failed inspecting tables for roll_number migration')
 
             super_admin = User.query.filter_by(email='vanitha.sty3375@gmail.com').first()
             if not super_admin:
@@ -466,6 +493,7 @@ def register():
         user = User(
             username=form.username.data,
             email=form.email.data,
+            roll_number=form.roll_number.data.strip() if form.roll_number.data else None,
             password=hashed_password,
             role='student',
             department=form.department.data,
@@ -477,6 +505,8 @@ def register():
             address=form.address.data
         )
         db.session.add(user)
+        # Ensure the hashed password is set (in case template masked password assignment)
+        user.password = hashed_password
         db.session.commit()
         
         subject = 'Welcome to Grievance Hub - Student Account'
@@ -1881,16 +1911,29 @@ def remove_student_assignment(assignment_id):
 def super_admin_users():
     if not is_super_admin(current_user):
         abort(403)
-    users = User.query.order_by(User.id).all()
-    students = User.query.filter_by(role='student').order_by(User.id).all()
-    staff = User.query.filter(User.role.in_(['staff', 'mentor'])).order_by(User.id).all()
-    others = User.query.filter(~User.role.in_(['student', 'staff', 'mentor'])).order_by(User.id).all()
+
+    all_users = User.query.order_by(User.id).all()
+
+    students = sorted(
+        [u for u in all_users if u.role == 'student'],
+        key=lambda u: (u.roll_number is None, u.roll_number)
+    )
+    staff = [u for u in all_users if u.role in ('staff', 'mentor')]
+    others = [u for u in all_users if u.role not in ('student', 'staff', 'mentor')]
+
+    complaint_counts = dict(
+        db.session.query(Complaint.user_id, func.count(Complaint.id))
+        .group_by(Complaint.user_id)
+        .all()
+    )
+
     return render_template(
         'super_admin_users.html',
-        users=users,
+        users=all_users,
         students=students,
         staff=staff,
-        others=others
+        others=others,
+        complaint_counts=complaint_counts
     )
 
 @app.route('/admin/user/<int:user_id>/change-role/<string:role>')
@@ -2057,6 +2100,8 @@ def edit_profile():
         current_user.parent_name = form.parent_name.data
         current_user.parent_phone = form.parent_phone.data
         current_user.address = form.address.data
+        # Update roll number if present
+        current_user.roll_number = form.roll_number.data.strip() if form.roll_number.data else None
         db.session.commit()
         flash('Your profile has been updated successfully.', 'success')
         return redirect(url_for('profile'))
@@ -2081,6 +2126,8 @@ def edit_student_profile(student_id):
         student.parent_name = form.parent_name.data
         student.parent_phone = form.parent_phone.data
         student.address = form.address.data
+        # Update roll number if provided
+        student.roll_number = form.roll_number.data.strip() if form.roll_number.data else None
         db.session.commit()
         flash('Student profile has been updated successfully.', 'success')
         if current_user.id == student.id:
@@ -2255,4 +2302,9 @@ def utility_processor():
 
 
 if __name__ == '__main__':
+    # Initialize/upgrade the database schema (adds missing columns to local SQLite) before starting
+    try:
+        initialize_database()
+    except Exception as e:
+        app.logger.exception('Database initialization failed at startup')
     app.run(debug=True)
