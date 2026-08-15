@@ -1,4 +1,4 @@
-from flask import Flask, render_template, redirect, url_for, flash, request, abort, jsonify
+from flask import Flask, render_template, redirect, url_for, flash, request, abort, jsonify, make_response
 from flask_login import login_user, current_user, logout_user, login_required
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
@@ -73,7 +73,7 @@ login_manager.init_app(app)
 # Compatibility shim: some Flask versions may remove `before_first_request`.
 # Provide a decorator that runs the wrapped function only once (on the first request).
 if not hasattr(app, 'before_first_request'):
-    def _before_first_request(func):
+    def before_first_request(func):
         def _wrapper(*args, **kwargs):
             if not getattr(app, '_got_first_request', False):
                 app._got_first_request = True
@@ -81,7 +81,6 @@ if not hasattr(app, 'before_first_request'):
             return None
         app.before_request(_wrapper)
         return func
-    app.before_first_request = _before_first_request
 
 # Add Jinja2 filter for timezone conversion
 @app.template_filter('localtime')
@@ -367,6 +366,16 @@ def initialize_database():
                     except Exception as e:
                         app.logger.exception('Could not add mentor_id column to complaint table')
 
+                # Ensure the complaint table has an action_taken column for storing notes about actions
+                if 'action_taken' not in complaint_columns:
+                    try:
+                        with db.engine.begin() as connection:
+                            # Use TEXT which works on both Postgres and SQLite
+                            connection.execute(text('ALTER TABLE complaint ADD COLUMN action_taken TEXT'))
+                        print('Added missing action_taken column to complaint table')
+                    except Exception as e:
+                        app.logger.exception('Could not add action_taken column to complaint table')
+
             if 'student_staff_assignment' in inspector.get_table_names():
                 duplicate_groups = (
                     db.session.query(
@@ -408,6 +417,12 @@ def initialize_database():
                     if 'roll_number' not in user_columns:
                         try:
                             print('Adding missing roll_number column to user table')
+                            if 'complaint' in inspector.get_table_names():
+                                complaint_columns_2 = [column['name'] for column in inspector.get_columns('complaint')]
+                                if 'action_taken' not in complaint_columns_2:
+                                    with db.engine.begin() as connection:
+                                        connection.execute(text('ALTER TABLE complaint ADD COLUMN action_taken TEXT'))
+                                    print('Added missing action_taken column to complaint table')
                             with db.engine.begin() as connection:
                                 # Use a VARCHAR(20) compatible type; SQLite will accept it as TEXT
                                 connection.execute(text('ALTER TABLE "user" ADD COLUMN roll_number VARCHAR(20)'))
@@ -680,74 +695,7 @@ def super_admin_dashboard():
                          recent_complaints=recent_complaints,
                          departments=departments)
 
-@app.route('/admin/send-imported-student-emails', methods=['POST'])
-@login_required
-def send_imported_student_emails():
 
-    # Only Super Admin can send imported student emails
-    if not is_super_admin(current_user):
-        abort(403)
-
-    try:
-        # Get students imported from CSV who have not received
-        # their welcome email yet.
-        students = User.query.filter(
-            User.role == 'student',
-            User.email.isnot(None),
-            User.email != '',
-            User.email_sent == False
-        ).all()
-
-        total_students = len(students)
-        sent_count = 0
-        failed_count = 0
-
-        print(
-            f"📧 Found {total_students} students "
-            f"waiting for welcome email."
-        )
-
-        for student in students:
-
-            success = send_csv_imported_student_email(student)
-
-            if success:
-                student.email_sent = True
-                sent_count += 1
-            else:
-                failed_count += 1
-
-            # Commit after every student so that if one email fails,
-            # already-sent students are not sent again.
-            try:
-                db.session.commit()
-            except Exception as db_error:
-                db.session.rollback()
-                print(
-                    f"❌ Database update failed for "
-                    f"{student.username}: {db_error}"
-                )
-
-        flash(
-            f'Email process completed. '
-            f'Sent: {sent_count}, Failed: {failed_count}.',
-            'success' if failed_count == 0 else 'warning'
-        )
-
-    except Exception as e:
-
-        db.session.rollback()
-
-        print(
-            f"❌ Error while sending imported student emails: {e}"
-        )
-
-        flash(
-            f'Error sending student emails: {str(e)}',
-            'danger'
-        )
-
-    return redirect(url_for('super_admin_dashboard'))
 # ========== HOD DASHBOARD ==========
 
 @app.route('/hod/dashboard')
@@ -927,7 +875,248 @@ def mentor_student_complaints(student_id):
                          stats=stats,
                          mentor=current_user)
 
+# ========== STUDENT EXPORT ROUTES (Staff/Mentor) ==========
 
+def _build_students_pdf(students, title):
+    from io import BytesIO
+    from reportlab.lib.pagesizes import landscape, letter
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph(title, styles['Title']))
+    story.append(Paragraph(
+        f"Generated: {datetime.utcnow().strftime('%d-%m-%Y %H:%M')} UTC &nbsp;&nbsp; "
+        f"Total: {len(students)}",
+        styles['Normal']
+    ))
+    story.append(Spacer(1, 12))
+
+    table_data = [['Roll No', 'Name', 'Email', 'Year/Section', 'Phone']]
+    for s in students:
+        year_section = f"{s.year} {s.section}" if s.year and s.section else "-"
+        table_data.append([
+            s.roll_number or '-',
+            s.username,
+            s.email,
+            year_section,
+            s.phone or '-'
+        ])
+
+    table = Table(table_data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#343a40')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f2f2f2')]),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    story.append(table)
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+
+def _build_students_csv(students):
+    import csv
+    from io import StringIO
+
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['Roll Number', 'Name', 'Email', 'Year', 'Section', 'Phone', 'Parent Name', 'Parent Phone'])
+    for s in students:
+        writer.writerow([
+            s.roll_number or '',
+            s.username,
+            s.email,
+            s.year or '',
+            s.section or '',
+            s.phone or '',
+            s.parent_name or '',
+            s.parent_phone or ''
+        ])
+    output.seek(0)
+    return output
+
+
+@app.route('/mentor/students/export/csv')
+@login_required
+def export_department_students_csv():
+    if current_user.role != 'staff':
+        abort(403)
+    from flask import Response
+    students = User.query.filter_by(department=current_user.department, role='student').order_by(User.roll_number).all()
+    csv_data = _build_students_csv(students)
+    filename = f"department_students_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
+    return Response(
+        csv_data.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename={filename}'}
+    )
+
+
+@app.route('/mentor/students/export/pdf')
+@login_required
+def export_department_students_pdf():
+    if current_user.role != 'staff':
+        abort(403)
+    from flask import send_file
+    students = User.query.filter_by(department=current_user.department, role='student').order_by(User.roll_number).all()
+    buffer = _build_students_pdf(students, f"All Students - {current_user.department}")
+    filename = f"department_students_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.pdf"
+    return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
+
+
+@app.route('/mentor/assigned-students/export/csv')
+@login_required
+def export_assigned_students_csv():
+    if current_user.role != 'staff':
+        abort(403)
+    from flask import Response
+    assignments = StudentStaffAssignment.query.filter_by(
+        staff_id=current_user.id,
+        department=current_user.department
+    ).all()
+    students = [a.student for a in assignments if a.student]
+    csv_data = _build_students_csv(students)
+    filename = f"my_assigned_students_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
+    return Response(
+        csv_data.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename={filename}'}
+    )
+
+
+@app.route('/mentor/assigned-students/export/pdf')
+@login_required
+def export_assigned_students_pdf():
+    if current_user.role != 'staff':
+        abort(403)
+    from flask import send_file
+    assignments = StudentStaffAssignment.query.filter_by(
+        staff_id=current_user.id,
+        department=current_user.department
+    ).all()
+    students = [a.student for a in assignments if a.student]
+    buffer = _build_students_pdf(students, f"My Assigned Students - {current_user.username}")
+    filename = f"my_assigned_students_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.pdf"
+    return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
+# ========== STUDENT EXPORT ROUTES (HOD - year/section wise) ==========
+
+@app.route('/hod/students/export/csv')
+@login_required
+def export_hod_students_csv():
+    if not is_department_admin(current_user):
+        abort(403)
+    from flask import Response
+    import csv
+    from io import StringIO
+
+    students = User.query.filter_by(
+        department=current_user.department, role='student'
+    ).order_by(User.year, User.section, User.roll_number).all()
+
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['Year', 'Section', 'Roll Number', 'Name', 'Email', 'Phone', 'Parent Name', 'Parent Phone'])
+
+    for s in students:
+        writer.writerow([
+            s.year or '',
+            s.section or '',
+            s.roll_number or '',
+            s.username,
+            s.email,
+            s.phone or '',
+            s.parent_name or '',
+            s.parent_phone or ''
+        ])
+
+    output.seek(0)
+    filename = f"{current_user.department}_students_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename={filename}'}
+    )
+
+
+@app.route('/hod/students/export/pdf')
+@login_required
+def export_hod_students_pdf():
+    if not is_department_admin(current_user):
+        abort(403)
+    from io import BytesIO
+    from flask import send_file
+    from reportlab.lib.pagesizes import landscape, letter
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    from itertools import groupby
+
+    students = User.query.filter_by(
+        department=current_user.department, role='student'
+    ).order_by(User.year, User.section, User.roll_number).all()
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph(f"{current_user.department} - Students by Year/Section", styles['Title']))
+    story.append(Paragraph(
+        f"Generated: {datetime.utcnow().strftime('%d-%m-%Y %H:%M')} UTC &nbsp;&nbsp; "
+        f"Total: {len(students)}",
+        styles['Normal']
+    ))
+    story.append(Spacer(1, 12))
+
+    # Group by (year, section) so each group prints as its own labeled table
+    def group_key(s):
+        return (s.year or 'Unassigned', s.section or '-')
+
+    for (year, section), group in groupby(students, key=group_key):
+        group_list = list(group)
+        story.append(Paragraph(f"Year {year}, Section {section} &nbsp; ({len(group_list)} students)", styles['Heading2']))
+        story.append(Spacer(1, 6))
+
+        table_data = [['Roll No', 'Name', 'Email', 'Phone']]
+        for s in group_list:
+            table_data.append([
+                s.roll_number or '-',
+                s.username,
+                s.email,
+                s.phone or '-'
+            ])
+
+        table = Table(table_data, repeatRows=1)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#343a40')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f2f2f2')]),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(table)
+        story.append(Spacer(1, 16))
+
+    doc.build(story)
+    buffer.seek(0)
+
+    filename = f"{current_user.department}_students_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.pdf"
+    return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
 @app.route('/send-message/<int:student_id>', methods=['POST'])
 @login_required
 def send_message_to_student(student_id):
@@ -1168,7 +1357,15 @@ def view_complaints():
     if status_filter:
         query = query.filter_by(status=status_filter)
 
-    complaints = query.order_by(Complaint.created_at.desc()).all()
+    from sqlalchemy import case
+
+    priority_order = case(
+        (Complaint.priority == 'high', 1),
+        (Complaint.priority == 'medium', 2),
+        (Complaint.priority == 'low', 3),
+        else_=4
+    )
+    complaints = query.order_by(priority_order, Complaint.created_at.desc()).all()
 
     categories = Complaint.query.with_entities(Complaint.category).distinct().all()
     statuses = ['pending', 'in_progress', 'resolved', 'rejected']
@@ -1183,6 +1380,89 @@ def view_complaints():
         status_filter=status_filter,
         assigned_to_filter=assigned_to_filter
     )
+@app.route('/complaints/export/pdf')
+@login_required
+def export_complaints_pdf():
+    from io import BytesIO
+    from reportlab.lib.pagesizes import landscape, letter
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    from flask import send_file
+
+    search_query = request.args.get('search', '')
+    category_filter = request.args.get('category', '')
+    status_filter = request.args.get('status', '')
+
+    # Same role-based access logic as view_complaints
+    if is_super_admin(current_user):
+        query = Complaint.query
+    elif is_department_admin(current_user):
+        query = Complaint.query.join(User, Complaint.user_id == User.id).filter(
+            User.department == current_user.department
+        )
+    elif current_user.role in ['staff', 'mentor']:
+        query = Complaint.query.filter(
+            (Complaint.assigned_to == current_user.id) | (Complaint.mentor_id == current_user.id)
+        )
+    else:
+        query = Complaint.query.filter_by(user_id=current_user.id)
+
+    if search_query:
+        query = query.filter(
+            Complaint.complaint_id.ilike(f'%{search_query}%') |
+            Complaint.title.ilike(f'%{search_query}%')
+        )
+    if category_filter:
+        query = query.filter_by(category=category_filter)
+    if status_filter:
+        query = query.filter_by(status=status_filter)
+
+    complaints = query.order_by(Complaint.created_at.desc()).all()
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph("Complaints Report", styles['Title']))
+    story.append(Paragraph(
+        f"Generated: {datetime.utcnow().strftime('%d-%m-%Y %H:%M')} UTC &nbsp;&nbsp; "
+        f"Total: {len(complaints)}",
+        styles['Normal']
+    ))
+    story.append(Spacer(1, 12))
+
+    table_data = [['Complaint ID', 'Title', 'Category', 'Status', 'Priority', 'Action Taken', 'Created']]
+    for c in complaints:
+        table_data.append([
+            c.complaint_id,
+            c.title[:40],
+            c.category,
+            c.status.replace('_', ' ').title(),
+            c.priority.title(),
+            (c.action_taken[:60] + '...') if c.action_taken and len(c.action_taken) > 60 else (c.action_taken or '-'),
+            c.created_at.strftime('%d-%m-%Y')
+        ])
+
+    table = Table(table_data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#343a40')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f2f2f2')]),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    story.append(table)
+
+    doc.build(story)
+    buffer.seek(0)
+
+    filename = f"complaints_export_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.pdf"
+    return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
 
 @app.route('/complaint/<int:complaint_id>', methods=['GET', 'POST'])
 @login_required
@@ -1195,6 +1475,13 @@ def complaint_details(complaint_id):
     
     comment_form = CommentForm()
     update_form = UpdateComplaintForm()
+    
+    # Pre-fill action_taken in the update form if present
+    try:
+        update_form.action_taken.data = complaint.action_taken
+    except Exception:
+        # If DB doesn't have the column yet, ignore and continue
+        update_form.action_taken.data = None
     
     mentor = None
     if complaint.mentor_id:
@@ -1280,14 +1567,14 @@ def complaint_details(complaint_id):
         
         if not can_update:
             abort(403)
-        
+
         old_status = complaint.status
         complaint.status = update_form.status.data
         if current_user.role != 'staff':
             complaint.assigned_to = update_form.assigned_to.data if update_form.assigned_to.data != 0 else None
+        complaint.action_taken = request.form.get('action_taken', '').strip() or None
         complaint.updated_at = datetime.utcnow()
         db.session.commit()
-        
         if old_status != complaint.status:
             create_notification(
                 complaint.user_id,
@@ -1296,7 +1583,7 @@ def complaint_details(complaint_id):
                 'status_update'
             )
             send_status_update_email(complaint, old_status)
-        
+            
         flash('Complaint updated successfully!', 'success')
         return redirect(url_for('complaint_details', complaint_id=complaint.id))
     
@@ -1424,18 +1711,36 @@ def api_update_status(complaint_id):
 def department_users():
     if not is_department_admin(current_user):
         abort(403)
-    
+
     users = User.query.filter_by(department=current_user.department).all()
-    students = get_department_students(current_user.department)
     staff = get_department_staff(current_user.department)
+
+    # Distinct sections in this department, for the filter dropdown
+    all_dept_students = get_department_students(current_user.department)
+    sections = sorted({s.section for s in all_dept_students if s.section})
+
+    # No "All Sections" option -- default to the first section if none chosen
+    section_filter = request.args.get('section', '') or (sections[0] if sections else '')
+
+    students_query = User.query.filter_by(department=current_user.department, role='student')
+    if section_filter:
+        students_query = students_query.filter_by(section=section_filter)
+    students = students_query.order_by(User.roll_number).all()
+    # Look up actual mentor from StudentStaffAssignment (mentor_name field is unused)
+    student_mentors = {}
+    for student in students:
+        mentor = get_primary_assigned_mentor(student)
+        if mentor:
+            student_mentors[student.id] = mentor.username
     
     return render_template('department_users.html', 
                          users=users,
                          students=students,
                          staff=staff,
-                         department=current_user.department)
-
-
+                         department=current_user.department,
+                         student_mentors=student_mentors,
+                         sections=sections,
+                         section_filter=section_filter)
 @app.route('/department/user/<int:user_id>/change-role/<string:role>')
 @login_required
 def department_change_user_role(user_id, role):
@@ -1912,7 +2217,12 @@ def super_admin_users():
     if not is_super_admin(current_user):
         abort(403)
 
-    all_users = User.query.order_by(User.id).all()
+    department_filter = request.args.get('department', '')
+
+    all_users_query = User.query
+    if department_filter:
+        all_users_query = all_users_query.filter_by(department=department_filter)
+    all_users = all_users_query.order_by(User.id).all()
 
     students = sorted(
         [u for u in all_users if u.role == 'student'],
@@ -1927,13 +2237,17 @@ def super_admin_users():
         .all()
     )
 
+    departments = Department.query.order_by(Department.name).all()
+
     return render_template(
         'super_admin_users.html',
         users=all_users,
         students=students,
         staff=staff,
         others=others,
-        complaint_counts=complaint_counts
+        complaint_counts=complaint_counts,
+        departments=departments,
+        department_filter=department_filter
     )
 
 @app.route('/admin/user/<int:user_id>/change-role/<string:role>')

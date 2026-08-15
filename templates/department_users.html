@@ -5,9 +5,12 @@
     <div class="col-12">
         <div class="d-flex justify-content-between align-items-center">
             <h2><i class="fas fa-users me-2"></i>{{ department }} Department Users</h2>
-            <div>
-                <a href="{{ url_for('add_department_staff') }}" class="btn btn-primary me-2">
-                    <i class="fas fa-user-plus me-2"></i>Add Staff/Mentor
+          <div>
+                <a href="{{ url_for('export_hod_students_csv') }}" class="btn btn-outline-success me-2" title="Export students by year/section">
+                    <i class="fas fa-file-csv me-2"></i>Export Students (CSV)
+                </a>
+                <a href="{{ url_for('export_hod_students_pdf') }}" class="btn btn-outline-danger me-2" title="Export students by year/section">
+                    <i class="fas fa-file-pdf me-2"></i>Export Students (PDF)
                 </a>
                 <a href="{{ url_for('hod_dashboard') }}" class="btn btn-secondary">
                     <i class="fas fa-arrow-left me-2"></i>Back to Dashboard
@@ -18,8 +21,29 @@
     </div>
 </div>
 
+<div class="row mb-3">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                <form method="GET" class="row g-3 align-items-end">
+                    <div class="col-md-4">
+                        <label class="form-label mb-1">Filter by Section</label>
+                        <select name="section" class="form-select" onchange="this.form.submit()">
+                            {% for sec in sections %}
+                            <option value="{{ sec }}" {% if section_filter == sec %}selected{% endif %}>
+                                Section {{ sec }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="row">
-    <div class="col-md-6">
+    <div class="col-12">
         <div class="card">
             <div class="card-header bg-primary text-white">
                 <h5 class="mb-0"><i class="fas fa-user-graduate me-2"></i>Students ({{ students|length }})</h5>
@@ -30,6 +54,7 @@
                         <thead>
                             <tr>
                                 <th>ID</th>
+                                <th>Roll No</th>
                                 <th>Name</th>
                                 <th>Email</th>
                                 <th>Year</th>
@@ -42,13 +67,14 @@
                             {% for student in students %}
                             <tr>
                                 <td>{{ student.id }}</td>
+                                <td>{{ student.roll_number or '-' }}</td>
                                 <td><i class="fas fa-user-circle me-1"></i>{{ student.username }}</td>
                                 <td>{{ student.email }}</td>
                                 <td>{{ student.year }}</td>
                                 <td>{{ student.section }}</td>
                                 <td>
-                                    {% if student.mentor_name %}
-                                        <span class="badge bg-info">{{ student.mentor_name }}</span>
+                                    {% if student.id in student_mentors %}
+                                        <span class="badge bg-info">{{ student_mentors[student.id] }}</span>
                                     {% else %}
                                         <span class="text-muted">Not assigned</span>
                                     {% endif %}
@@ -85,60 +111,4 @@
         </div>
     </div>
     
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-header bg-success text-white">
-                <h5 class="mb-0"><i class="fas fa-chalkboard-teacher me-2"></i>Staff & Mentors ({{ staff|length }})</h5>
-            </div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>Name</th>
-                                <th>Email</th>
-                                <th>Role</th>
-                                <th>Assigned Complaints</th>
-                                <th>Actions</th>
-                             </thead>
-                        <tbody>
-                            {% for s in staff %}
-                            <tr>
-                                <td>{{ s.id }}</td>
-                                <td><i class="fas fa-user-tie me-1"></i>{{ s.username }}</td>
-                                <td>{{ s.email }}</td>
-                                <td><span class="badge bg-success">Staff/Mentor</span></td>
-                                <td><span class="badge bg-info">{{ s.assigned_complaints|length }}</span></td>
-                                <td>
-                                    <div class="btn-group" role="group">
-                                        <button type="button" class="btn btn-sm btn-warning dropdown-toggle" data-bs-toggle="dropdown">
-                                            Change Role
-                                        </button>
-                                        <ul class="dropdown-menu">
-                                            <li><a class="dropdown-item" href="{{ url_for('department_change_user_role', user_id=s.id, role='student') }}">Student</a></li>
-                                            <li><a class="dropdown-item" href="{{ url_for('department_change_user_role', user_id=s.id, role='staff') }}">Staff/Mentor</a></li>
-                                        </ul>
-                                        <form method="POST" action="{{ url_for('department_delete_user', user_id=s.id) }}" 
-                                              style="display: inline;" 
-                                              onsubmit="return confirm('Delete this user?')">
-                                            <button type="submit" class="btn btn-sm btn-danger ms-1">
-                                                <i class="fas fa-trash-alt"></i>
-                                            </button>
-                                        </form>
-                                    </div>
-                                </td>
-                            </tr>
-                            {% else %}
-                            <tr>
-                                <td colspan="6" class="text-center text-muted">No staff in this department. <a href="{{ url_for('add_department_staff') }}">Add staff</a></td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-{% endblock %}
+    {% endblock %}

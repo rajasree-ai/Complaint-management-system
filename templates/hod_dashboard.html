@@ -88,7 +88,8 @@
                                     <th>Priority</th>
                                     <th>Date</th>
                                     <th>Action</th>
-                                 </thead>
+                                </tr>
+                            </thead>
                             <tbody>
                                 {% for complaint in complaints[:8] %}
                                 <tr>
@@ -132,73 +133,10 @@
                 {% endif %}
             </div>
         </div>
-        
-        <!-- Staff Assignments Card - NOW INSIDE THE ROW -->
-        <div class="card mt-3">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="fas fa-user-tie me-2"></i>Staff Assignments</h5>
-            </div>
-            <div class="card-body">
-                <div class="row">
-                    {% for s in staff %}
-                    <div class="col-md-6 mb-2">
-                        <div class="card bg-light">
-                            <div class="card-body py-2">
-                                <div class="d-flex justify-content-between align-items-center">
-                                    <div>
-                                        <i class="fas fa-chalkboard-teacher me-2 text-success"></i>
-                                        <strong>{{ s.username }}</strong>
-                                        <br>
-                                        <small class="text-muted">Assigned: {{ s.assigned_complaints|length }} complaints</small>
-                                    </div>
-                                    <a href="{{ url_for('view_complaints') }}?assigned_to={{ s.id }}" class="btn btn-sm btn-outline-primary">
-                                        View Assigned
-                                    </a>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-                <div class="mt-2">
-                    <a href="{{ url_for('add_department_staff') }}" class="btn btn-sm btn-outline-primary">
-                        <i class="fas fa-plus me-1"></i>Add New Staff/Mentor
-                    </a>
-                </div>
-            </div>
-        </div>
     </div>
-    
+
     <div class="col-md-5">
-        <!-- Department Students Card -->
-        <div class="card mb-3">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="fas fa-user-graduate me-2"></i>Students ({{ total_students }})</h5>
-                <a href="{{ url_for('department_users') }}" class="btn btn-sm btn-outline-primary">Manage</a>
-            </div>
-            <div class="card-body">
-                <div class="list-group">
-                    {% for student in students[:5] %}
-                        <div class="list-group-item">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <div>
-                                    <i class="fas fa-user-circle me-2"></i>
-                                    <strong>{{ student.username }}</strong>
-                                    <br>
-                                    <small class="text-muted">{{ student.email }}</small>
-                                    <br>
-                                    <small>{{ student.year }}, Section {{ student.section }}</small>
-                                </div>
-                                <span class="badge bg-primary">{{ student.complaints|length }} complaints</span>
-                            </div>
-                        </div>
-                    {% else %}
-                        <p class="text-muted">No students in this department.</p>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-        
+        <!-- Statistics Chart -->
         <!-- Statistics Chart -->
         <div class="card">
             <div class="card-header">

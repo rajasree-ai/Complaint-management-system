@@ -44,25 +44,21 @@
                                 <td>
                                     <span class="badge bg-success">{{ staff.resolved }}</span>
                                 </td>
-                                <td>
-                                    <div class="progress" style="height: 20px;">
-                                        <div class="progress-bar bg-success" 
-                                             style="width: {{ staff.performance }}%;">
-                                            {{ staff.performance }}%
+                               <td>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <div class="progress flex-grow-1" style="height: 20px;">
+                                            <div class="progress-bar bg-success"
+                                                 style="width: {{ staff.performance }}%;">
+                                            </div>
                                         </div>
+                                        <small class="text-nowrap">{{ staff.performance }}%</small>
                                     </div>
                                 </td>
                                 <td>
-                                    <div class="btn-group">
-                                        <a href="{{ url_for('view_complaints') }}?assigned_to={{ staff.user.id }}" 
-                                           class="btn btn-sm btn-info">
-                                            <i class="fas fa-tasks"></i> View Work
-                                        </a>
-                                        <button class="btn btn-sm btn-danger" 
-                                                onclick="deleteStaff({{ staff.user.id }}, '{{ staff.user.username }}')">
-                                            <i class="fas fa-trash"></i>
-                                        </button>
-                                    </div>
+                                    <button class="btn btn-sm btn-danger"
+                                            onclick="deleteStaff({{ staff.user.id }}, '{{ staff.user.username }}')">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
                                 </td>
                             </tr>
                             {% else %}

@@ -35,11 +35,17 @@
                 <h2><i class="fas fa-user-graduate me-2"></i>Manage Students</h2>
                 <p class="text-muted">Welcome, {{ mentor_name }}! Manage students in the {{ department }} department.</p>
             </div>
+            <div class="d-flex gap-2">
+                <a href="{{ url_for('export_assigned_students_csv') }}" class="btn btn-outline-success" title="Export my assigned students">
+                    <i class="fas fa-file-csv"></i> Export CSV
+                </a>
+                <a href="{{ url_for('export_assigned_students_pdf') }}" class="btn btn-outline-danger" title="Export my assigned students">
+                    <i class="fas fa-file-pdf"></i> Export PDF
+                </a>
+            </div>
         </div>
     </div>
 </div>
-
-
 <!-- My Assigned Students Sections -->
 {% if grouped_assigned_students %}
 <div class="row mb-4">

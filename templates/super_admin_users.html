@@ -12,7 +12,34 @@
         <p class="text-muted">Manage all users across all departments</p>
     </div>
 </div>
-
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                <form method="GET" class="row g-3 align-items-end">
+                    <div class="col-md-4">
+                        <label class="form-label mb-1">Filter by Department</label>
+                        <select name="department" class="form-select" onchange="this.form.submit()">
+                            <option value="">All Departments</option>
+                            {% for dept in departments %}
+                            <option value="{{ dept.name }}" {% if department_filter == dept.name %}selected{% endif %}>
+                                {{ dept.name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    {% if department_filter %}
+                    <div class="col-md-2">
+                        <a href="{{ url_for('super_admin_users') }}" class="btn btn-outline-secondary w-100">
+                            <i class="fas fa-times me-1"></i>Clear
+                        </a>
+                    </div>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
 {% macro user_table(user_list, show_roll_number=false) %}
 <div class="table-responsive">
     <table class="table table-hover">

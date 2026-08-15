@@ -98,6 +98,7 @@ class UpdateComplaintForm(FlaskForm):
         ('rejected', 'Rejected')
     ])
     assigned_to = SelectField('Assign To', choices=[], coerce=int)
+    action_taken = TextAreaField('Action Taken', validators=[Length(max=1000)])
     submit = SubmitField('Update')
 
 

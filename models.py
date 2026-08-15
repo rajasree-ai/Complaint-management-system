@@ -45,12 +45,15 @@ class Complaint(db.Model):
     category = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), default='pending')
     priority = db.Column(db.String(20), default='medium')
+    action_taken = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     assigned_to = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     mentor_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)  # Make sure this exists
+    # Free-text field to capture what action was taken for this complaint (e.g., interventions, fixes, notes)
+    action_taken = db.Column(db.Text, nullable=True)
     
     comments = db.relationship('Comment', backref='complaint', lazy=True, cascade='all, delete-orphan')
     notifications = db.relationship('Notification', backref='complaint', lazy=True, cascade='all, delete-orphan')

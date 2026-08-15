@@ -180,6 +180,7 @@
                         </select>
                     </div>
                     
+                   {% if is_super_admin(current_user) or is_department_admin(current_user) %}
                     <div class="mb-3">
                         <label class="form-label fw-bold">Assign To (Staff/Mentor)</label>
                         <select name="assigned_to" class="form-select">
@@ -191,6 +192,13 @@
                             {% endfor %}
                         </select>
                         <small class="text-muted">Assign this complaint to a staff member or mentor for handling</small>
+                    </div>
+                    {% endif %}
+
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Action Taken (notes)</label>
+                        <textarea name="action_taken" class="form-control" rows="4">{{ update_form.action_taken.data or complaint.action_taken or '' }}</textarea>
+                        <small class="text-muted">Describe any action taken for this complaint (interventions, fixes, meetings, etc.)</small>
                     </div>
                     
                     <button type="submit" name="update_complaint" class="btn btn-primary w-100">
