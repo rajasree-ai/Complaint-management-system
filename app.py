@@ -10,8 +10,8 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 from flask_mail import Mail, Message
 # Load environment variables from .env for local development
-load_dotenv()
-
+load_dotenv(override=True)
+print(f"DEBUG BREVO_API_KEY raw value: {repr(os.environ.get('BREVO_API_KEY'))}")
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -1031,15 +1031,17 @@ def export_hod_students_csv():
 
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow(['Year', 'Section', 'Roll Number', 'Name', 'Email', 'Phone', 'Parent Name', 'Parent Phone'])
+    writer.writerow(['Year', 'Section', 'Roll Number', 'Name', 'Email', 'Mentor', 'Phone', 'Parent Name', 'Parent Phone'])
 
     for s in students:
+        mentor = get_primary_assigned_mentor(s)
         writer.writerow([
             s.year or '',
             s.section or '',
             s.roll_number or '',
             s.username,
             s.email,
+            mentor.username if mentor else 'Not assigned',
             s.phone or '',
             s.parent_name or '',
             s.parent_phone or ''
@@ -1093,12 +1095,14 @@ def export_hod_students_pdf():
         story.append(Paragraph(f"Year {year}, Section {section} &nbsp; ({len(group_list)} students)", styles['Heading2']))
         story.append(Spacer(1, 6))
 
-        table_data = [['Roll No', 'Name', 'Email', 'Phone']]
+        table_data = [['Roll No', 'Name', 'Email', 'Mentor', 'Phone']]
         for s in group_list:
+            mentor = get_primary_assigned_mentor(s)
             table_data.append([
                 s.roll_number or '-',
                 s.username,
                 s.email,
+                mentor.username if mentor else '-',
                 s.phone or '-'
             ])
 
@@ -1726,10 +1730,22 @@ def department_users():
     # No "All Sections" option -- default to the first section if none chosen
     section_filter = request.args.get('section', '') or (sections[0] if sections else '')
 
+    import re
+
+    def roll_number_sort_key(student):
+        # Extract trailing digits from roll_number (e.g. "ES24AD117" -> 117)
+        # so sorting is numeric, not alphabetical.
+        if not student.roll_number:
+            return (1, 0, '')  # push blanks to the end
+        match = re.search(r'(\d+)$', student.roll_number)
+        if match:
+            return (0, int(match.group(1)), student.roll_number)
+        return (0, 0, student.roll_number)
+
     students_query = User.query.filter_by(department=current_user.department, role='student')
     if section_filter:
         students_query = students_query.filter_by(section=section_filter)
-    students = students_query.order_by(User.roll_number).all()
+    students = sorted(students_query.all(), key=roll_number_sort_key)
     # Look up actual mentor from StudentStaffAssignment (mentor_name field is unused)
     student_mentors = {}
     for student in students:
@@ -2221,6 +2237,16 @@ def super_admin_users():
     if not is_super_admin(current_user):
         abort(403)
 
+    import re
+
+    def roll_number_sort_key(student):
+        if not student.roll_number:
+            return (1, 0, '')
+        match = re.search(r'(\d+)$', student.roll_number)
+        if match:
+            return (0, int(match.group(1)), student.roll_number)
+        return (0, 0, student.roll_number)
+
     departments = Department.query.order_by(Department.name).all()
     department_filter = request.args.get('department', '') or (departments[0].name if departments else '')
 
@@ -2230,7 +2256,7 @@ def super_admin_users():
     all_users = all_users_query.order_by(User.id).all()
     students = sorted(
         [u for u in all_users if u.role == 'student'],
-        key=lambda u: (u.roll_number is None, u.roll_number)
+        key=roll_number_sort_key
     )
     staff = [u for u in all_users if u.role in ('staff', 'mentor')]
     others = [u for u in all_users if u.role not in ('student', 'staff', 'mentor')]
