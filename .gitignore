@@ -11,8 +11,6 @@
 !.env.development.example
 !.env.production.example
 config.py
-app.py
-add_admin.py
 *.pem
 *.key
 *.p12
