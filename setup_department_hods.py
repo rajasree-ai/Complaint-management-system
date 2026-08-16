@@ -1,3 +1,5 @@
+﻿import os
+
 # setup_department_hods.py
 from app import app, db
 from models import User, Department
@@ -6,14 +8,18 @@ from werkzeug.security import generate_password_hash
 with app.app_context():
     # Department list with their HOD credentials
     departments = [
-        {'name': 'Computer Science', 'hod_username': 'hod_cs', 'hod_email': 'hod.cs@college.edu', 'hod_password': 'hod@123'},
-        {'name': 'Information Technology', 'hod_username': 'hod_it', 'hod_email': 'hod.it@college.edu', 'hod_password': 'hod@123'},
-        {'name': 'Electronics and Communication', 'hod_username': 'hod_ec', 'hod_email': 'hod.ec@college.edu', 'hod_password': 'hod@123'},
-        {'name': 'Electrical and Electronics', 'hod_username': 'hod_ee', 'hod_email': 'hod.ee@college.edu', 'hod_password': 'hod@123'},
-        {'name': 'Mechanical Engineering', 'hod_username': 'hod_mech', 'hod_email': 'hod.mech@college.edu', 'hod_password': 'hod@123'},
-        {'name': 'Civil Engineering', 'hod_username': 'hod_civil', 'hod_email': 'hod.civil@college.edu', 'hod_password': 'hod@123'},
-        {'name': 'Artificial Intelligence and Data Science', 'hod_username': 'hod_ads', 'hod_email': 'hod.ads@college.edu', 'hod_password': 'hod@123'},
+        {'name': 'Computer Science', 'hod_username': 'hod_cs', 'hod_email': 'hod.cs@college.edu'},
+        {'name': 'Information Technology', 'hod_username': 'hod_it', 'hod_email': 'hod.it@college.edu'},
+        {'name': 'Electronics and Communication', 'hod_username': 'hod_ec', 'hod_email': 'hod.ec@college.edu'},
+        {'name': 'Electrical and Electronics', 'hod_username': 'hod_ee', 'hod_email': 'hod.ee@college.edu'},
+        {'name': 'Mechanical Engineering', 'hod_username': 'hod_mech', 'hod_email': 'hod.mech@college.edu'},
+        {'name': 'Civil Engineering', 'hod_username': 'hod_civil', 'hod_email': 'hod.civil@college.edu'},
+        {'name': 'Artificial Intelligence and Data Science', 'hod_username': 'hod_ads', 'hod_email': 'hod.ads@college.edu'},
     ]
+
+    hod_password = os.environ.get('HOD_PASSWORD')
+    if not hod_password:
+        raise RuntimeError('HOD_PASSWORD environment variable is required.')
     
     print("=" * 60)
     print("Setting up Department HODs")
@@ -58,5 +64,5 @@ with app.app_context():
     print("\nHOD Login Credentials:")
     print("-" * 40)
     for dept in departments:
-        print(f"{dept['name']}: {dept['hod_email']} / {dept['hod_password']}")
-    print("\nMain Admin: vanitha.sty3375@gmail.com / vanitha@75")
+        print(f"{dept['name']}: {dept['hod_email']} / [hidden via HOD_PASSWORD env]")
+    print("\nMain Admin: vanitha.sty3375@gmail.com / [hidden via SUPER_ADMIN_PASSWORD env]")
