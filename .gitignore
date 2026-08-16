@@ -1,12 +1,15 @@
 # Secrets & Environment Variables
 .env
 .env.*
-!.env.example
-!.env.development.example
-!.env.production.example
 .env.local
 .env.production
 .env.test
+*.local
+*.secret
+*.secrets
+!.env.example
+!.env.development.example
+!.env.production.example
 config.py
 add_admin.py
 *.pem

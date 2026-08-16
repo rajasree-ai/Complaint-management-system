@@ -40,7 +40,7 @@ from sqlalchemy import inspect, text, func
 
 # Initialize Flask app
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-this-secret-key')
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or os.urandom(32).hex()
 
 database_url = os.environ.get('DATABASE_URL') or 'sqlite:///grievance_hub.db'
 database_url = database_url.strip().strip('"').strip("'")
@@ -58,8 +58,12 @@ app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.sendgrid.net')
 app.config['MAIL_PORT'] = int(os.environ.get('MAIL_PORT', 587))
 app.config['MAIL_USE_TLS'] = os.environ.get('MAIL_USE_TLS', 'True').lower() == 'true'
 app.config['MAIL_USE_SSL'] = os.environ.get('MAIL_USE_SSL', 'False').lower() == 'true'
-app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME', 'apikey')
-app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD') or os.environ.get('SENDGRID_API_KEY')
+app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME') or os.environ.get('MAIL_DEFAULT_SENDER') or 'apikey'
+app.config['MAIL_PASSWORD'] = (
+    os.environ.get('MAIL_PASSWORD')
+    or os.environ.get('BREVO_API_KEY')
+    or os.environ.get('SENDGRID_API_KEY')
+)
 app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_DEFAULT_SENDER', 'no-reply@example.com')
 
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
@@ -2217,13 +2221,13 @@ def super_admin_users():
     if not is_super_admin(current_user):
         abort(403)
 
-    department_filter = request.args.get('department', '')
+    departments = Department.query.order_by(Department.name).all()
+    department_filter = request.args.get('department', '') or (departments[0].name if departments else '')
 
     all_users_query = User.query
     if department_filter:
         all_users_query = all_users_query.filter_by(department=department_filter)
     all_users = all_users_query.order_by(User.id).all()
-
     students = sorted(
         [u for u in all_users if u.role == 'student'],
         key=lambda u: (u.roll_number is None, u.roll_number)

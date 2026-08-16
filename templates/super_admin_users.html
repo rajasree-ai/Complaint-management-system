@@ -20,7 +20,6 @@
                     <div class="col-md-4">
                         <label class="form-label mb-1">Filter by Department</label>
                         <select name="department" class="form-select" onchange="this.form.submit()">
-                            <option value="">All Departments</option>
                             {% for dept in departments %}
                             <option value="{{ dept.name }}" {% if department_filter == dept.name %}selected{% endif %}>
                                 {{ dept.name }}
@@ -28,13 +27,6 @@
                             {% endfor %}
                         </select>
                     </div>
-                    {% if department_filter %}
-                    <div class="col-md-2">
-                        <a href="{{ url_for('super_admin_users') }}" class="btn btn-outline-secondary w-100">
-                            <i class="fas fa-times me-1"></i>Clear
-                        </a>
-                    </div>
-                    {% endif %}
                 </form>
             </div>
         </div>
@@ -114,8 +106,6 @@
                                 </button>
                             </form>
                         </div>
-                    {% else %}
-                        <span class="text-muted">Current User</span>
                     {% endif %}
                 </td>
             </tr>
