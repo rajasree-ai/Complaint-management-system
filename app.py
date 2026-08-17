@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from flask_mail import Mail, Message
 # Load environment variables from .env for local development
 load_dotenv(override=True)
-print(f"DEBUG BREVO_API_KEY raw value: {repr(os.environ.get('BREVO_API_KEY'))}")
+
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -1471,7 +1471,66 @@ def export_complaints_pdf():
 
     filename = f"complaints_export_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.pdf"
     return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
-
+@app.route('/complaints/export/csv')
+@login_required
+def export_complaints():
+    from flask import Response
+    import csv
+    from io import StringIO
+ 
+    search_query = request.args.get('search', '')
+    category_filter = request.args.get('category', '')
+    status_filter = request.args.get('status', '')
+ 
+    # Same role-based access logic as view_complaints / export_complaints_pdf
+    if is_super_admin(current_user):
+        query = Complaint.query
+    elif is_department_admin(current_user):
+        query = Complaint.query.join(User, Complaint.user_id == User.id).filter(
+            User.department == current_user.department
+        )
+    elif current_user.role in ['staff', 'mentor']:
+        query = Complaint.query.filter(
+            (Complaint.assigned_to == current_user.id) | (Complaint.mentor_id == current_user.id)
+        )
+    else:
+        query = Complaint.query.filter_by(user_id=current_user.id)
+ 
+    if search_query:
+        query = query.filter(
+            Complaint.complaint_id.ilike(f'%{search_query}%') |
+            Complaint.title.ilike(f'%{search_query}%')
+        )
+    if category_filter:
+        query = query.filter_by(category=category_filter)
+    if status_filter:
+        query = query.filter_by(status=status_filter)
+ 
+    complaints = query.order_by(Complaint.created_at.desc()).all()
+ 
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['Complaint ID', 'Title', 'Category', 'Status', 'Priority', 'Action Taken', 'Created'])
+ 
+    for c in complaints:
+        writer.writerow([
+            c.complaint_id,
+            c.title,
+            c.category,
+            c.status.replace('_', ' ').title(),
+            c.priority.title(),
+            c.action_taken or '',
+            c.created_at.strftime('%d-%m-%Y %H:%M')
+        ])
+ 
+    output.seek(0)
+    filename = f"complaints_export_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename={filename}'}
+    )
+ 
 @app.route('/complaint/<int:complaint_id>', methods=['GET', 'POST'])
 @login_required
 
