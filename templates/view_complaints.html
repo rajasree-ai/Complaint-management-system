@@ -190,12 +190,14 @@
                         </table>
                     </div>
                     </div>
+                    {% if current_user.role != 'student' %}
                     <div class="text-end mt-3">
                         <a href="{{ url_for('export_complaints_pdf', search=search_query, category=category_filter, status=status_filter) }}"
                            class="btn btn-outline-secondary" title="Export visible complaints as PDF">
                             <i class="fas fa-file-pdf me-1"></i> Export PDF
                         </a>
                     </div>
+                    {% endif %}
         
                 {% else %}
                     <div class="text-center py-5">
