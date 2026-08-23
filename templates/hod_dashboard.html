@@ -86,6 +86,7 @@
                                     <th>Title</th>
                                     <th>Status</th>
                                     <th>Priority</th>
+                                    <th>Deadline</th>
                                     <th>Date</th>
                                     <th>Action</th>
                                 </tr>
@@ -114,6 +115,13 @@
                                             <span class="badge bg-warning text-dark">Medium</span>
                                         {% else %}
                                             <span class="badge bg-info">Low</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if complaint.deadline %}
+                                            <span class="deadline-badge" data-deadline="{{ complaint.deadline.strftime('%Y-%m-%dT%H:%M:%S') }}Z">Calculating...</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">—</span>
                                         {% endif %}
                                     </td>
                                     <td>{{ complaint.created_at.strftime('%d-%m-%Y') }}</td>

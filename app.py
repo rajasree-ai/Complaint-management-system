@@ -6,6 +6,8 @@ from sqlalchemy.exc import IntegrityError
 import logging
 import sys
 import os
+import csv
+import io
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 from flask_mail import Mail, Message
@@ -28,16 +30,20 @@ from utils import (
     send_complaint_registration_email,
     send_comment_notification,
     send_status_update_email,
+    notify_merged_duplicate_authors,
     send_otp_email,
     send_csv_imported_student_email,
+    send_csv_imported_staff_email,
     generate_otp,
+    generate_random_password,
     create_notification,
     calculate_complaint_stats,
     get_hod_department,
     utc_to_local
 )
 from sqlalchemy import inspect, text, func
-
+from automation import init_automation, compute_deadline, run_auto_responder
+from ai_analytics import classify_complaint, get_analytics_summary, CATEGORIES, suggest_form_category
 # Initialize Flask app
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or os.urandom(32).hex()
@@ -73,6 +79,10 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
 # Initialize extensions
 db.init_app(app)
 login_manager.init_app(app)
+
+# Start background automation (escalation, assignment, duplicate detection, reports,
+# reminders, backups, overdue status updates). See automation.py for details.
+init_automation(app)
 
 # Compatibility shim: some Flask versions may remove `before_first_request`.
 # Provide a decorator that runs the wrapped function only once (on the first request).
@@ -162,7 +172,109 @@ def get_primary_assigned_mentor(student):
     """Return the primary mentor/staff assignment for a student"""
     assignment = StudentStaffAssignment.query.filter_by(student_id=student.id).order_by(StudentStaffAssignment.assigned_at.desc()).first()
     return assignment.staff if assignment else None
+DEFAULT_IMPORT_PASSWORD = os.environ.get('DEFAULT_IMPORT_PASSWORD', 'Grievance@123')
 
+
+def _parse_csv_stream(file_storage):
+    """Parse an uploaded CSV FileStorage into a list of dict rows."""
+    import csv, io
+    raw = file_storage.stream.read().decode('utf-8-sig')
+    stream = io.StringIO(raw, newline=None)
+    reader = csv.DictReader(stream)
+    rows = [row for row in reader]
+    return rows, reader.fieldnames
+
+
+def _import_students(rows, department, default_password):
+    """Create student accounts from parsed CSV rows. Returns a summary dict."""
+    required = ['username', 'email', 'roll_number', 'year', 'section']
+    created, skipped, errors = [], [], []
+    hashed_password = generate_password_hash(default_password)
+
+    for i, raw_row in enumerate(rows, start=2):  # row 1 is the header
+        row = {k.strip(): (v.strip() if v else v) for k, v in raw_row.items() if k}
+        missing = [f for f in required if not row.get(f)]
+        if missing:
+            errors.append(f"Row {i}: missing {', '.join(missing)}")
+            continue
+
+        email = row['email'].lower()
+        roll_number = row['roll_number']
+
+        existing = User.query.filter(
+            (User.email == email) | (User.roll_number == roll_number)
+        ).first()
+        if existing:
+            skipped.append(f"Row {i}: {row['username']} ({email}) already exists")
+            continue
+
+        student = User(
+            username=row['username'],
+            email=email,
+            roll_number=roll_number,
+            password=hashed_password,
+            role='student',
+            department=department,
+            year=row['year'],
+            section=row['section'],
+            phone=row.get('phone') or None,
+            parent_name=row.get('parent_name') or None,
+            parent_phone=row.get('parent_phone') or None,
+            address=row.get('address') or None
+        )
+        db.session.add(student)
+        created.append(f"{row['username']} ({email})")
+
+    if created:
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            errors.append("Database error while saving — please retry with the failed rows.")
+            created = []
+
+    return {'created': created, 'skipped': skipped, 'errors': errors}
+
+
+def _import_staff(rows, department, default_password):
+    """Create staff accounts from parsed CSV rows. Returns a summary dict."""
+    required = ['username', 'email']
+    created, skipped, errors = [], [], []
+    hashed_password = generate_password_hash(default_password)
+
+    for i, raw_row in enumerate(rows, start=2):
+        row = {k.strip(): (v.strip() if v else v) for k, v in raw_row.items() if k}
+        missing = [f for f in required if not row.get(f)]
+        if missing:
+            errors.append(f"Row {i}: missing {', '.join(missing)}")
+            continue
+
+        email = row['email'].lower()
+        existing = User.query.filter_by(email=email).first()
+        if existing:
+            skipped.append(f"Row {i}: {row['username']} ({email}) already exists")
+            continue
+
+        staff = User(
+            username=row['username'],
+            email=email,
+            password=hashed_password,
+            role='staff',
+            department=department,
+            phone=row.get('phone') or None
+        )
+        db.session.add(staff)
+        created.append(f"{row['username']} ({email})")
+
+    if created:
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            errors.append("Database error while saving — please retry with the failed rows.")
+            created = []
+
+    return {'created': created, 'skipped': skipped, 'errors': errors}
 
 def can_manage_user(user, target_user):
     """Check if user can manage another user"""
@@ -247,7 +359,15 @@ def can_delete_user(user):
 
 
 def renumber_student_ids():
-    """Renumber student IDs to be sequential after deletion"""
+    """Renumber student IDs to be sequential after deletion.
+    Only supported on SQLite (uses PRAGMA to safely bypass FK checks during the shuffle).
+    On Postgres, ID gaps after deletion are harmless and cosmetic only, so this is a no-op there
+    rather than risking a foreign-key-constraint-violation mid-renumber.
+    """
+    if db.engine.dialect.name != 'sqlite':
+        print('Skipping student ID renumbering (not supported on this database; safe to skip — IDs having gaps is harmless)')
+        return
+
     try:
         # Get all students ordered by current ID
         students = User.query.filter_by(role='student').order_by(User.id).all()
@@ -380,6 +500,27 @@ def initialize_database():
                     except Exception as e:
                         app.logger.exception('Could not add action_taken column to complaint table')
 
+                # Ensure automation-related columns exist (deadline, escalation, duplicates, etc.)
+                # Types below work on both SQLite and Postgres (unlike SQLite-only names like DATETIME).
+                automation_columns = {
+                    'deadline': 'TIMESTAMP',
+                    'is_overdue': 'BOOLEAN DEFAULT FALSE',
+                    'escalation_level': 'INTEGER DEFAULT 0',
+                    'last_escalated_at': 'TIMESTAMP',
+                    'last_reminded_at': 'TIMESTAMP',
+                    'is_duplicate_of': 'INTEGER',
+                    'auto_response_sent': 'BOOLEAN DEFAULT FALSE',
+                    'ai_category': 'VARCHAR(50)',
+                }
+                for col_name, col_type in automation_columns.items():
+                    if col_name not in complaint_columns:
+                        try:
+                            with db.engine.begin() as connection:
+                                connection.execute(text(f'ALTER TABLE complaint ADD COLUMN {col_name} {col_type}'))
+                            print(f'Added missing {col_name} column to complaint table')
+                        except Exception as e:
+                            app.logger.exception(f'Could not add {col_name} column to complaint table')
+
             if 'student_staff_assignment' in inspector.get_table_names():
                 duplicate_groups = (
                     db.session.query(
@@ -413,6 +554,32 @@ def initialize_database():
                     print('Ensured student assignment uniqueness index exists')
                 except Exception:
                     app.logger.exception('Could not create unique index for student_staff_assignment')
+
+            # Widen phone/parent_phone columns to fit numbers like "999.../888..."
+            # that some CSV imports contain (two numbers in one field).
+            try:
+                if 'user' in inspector.get_table_names():
+                    with db.engine.begin() as connection:
+                        connection.execute(text('ALTER TABLE "user" ALTER COLUMN parent_phone TYPE VARCHAR(50)'))
+                        connection.execute(text('ALTER TABLE "user" ALTER COLUMN phone TYPE VARCHAR(20)'))
+                    print('Widened phone/parent_phone columns')
+            except Exception:
+                app.logger.exception('Could not widen phone/parent_phone columns (may already be widened)')
+
+            # Username is a display name, not a login credential (login uses email) — allow
+            # duplicates since real students can share the same name across different batches.
+            try:
+                if 'user' in inspector.get_table_names():
+                    unique_constraints = inspector.get_unique_constraints('user')
+                    for uc in unique_constraints:
+                        if 'username' in uc.get('columns', []):
+                            constraint_name = uc.get('name')
+                            if constraint_name:
+                                with db.engine.begin() as connection:
+                                    connection.execute(text(f'ALTER TABLE "user" DROP CONSTRAINT IF EXISTS "{constraint_name}"'))
+                                print(f'Dropped unique constraint {constraint_name} on user.username')
+            except Exception:
+                app.logger.exception('Could not drop unique constraint on username (may not exist or already dropped)')
 
             # Ensure local SQLite user table has the roll_number column (add if missing).
             try:
@@ -575,10 +742,6 @@ def register_staff():
             flash('Passwords do not match!', 'danger')
             return redirect(url_for('register_staff'))
         
-        if User.query.filter_by(username=username).first():
-            flash('Username already taken!', 'danger')
-            return redirect(url_for('register_staff'))
-
         if User.query.filter_by(email=email).first():
             flash('Email already registered!', 'danger')
             return redirect(url_for('register_staff'))
@@ -1246,7 +1409,22 @@ def mentor_delete_student(student_id):
 
 
 # ========== COMPLAINT ROUTES ==========
+@app.route('/api/suggest-category', methods=['POST'])
+@login_required
+def api_suggest_category():
+    if current_user.role != 'student':
+        return jsonify({'error': 'Unauthorized'}), 403
 
+    data = request.get_json() or {}
+    title = (data.get('title') or '').strip()
+    description = (data.get('description') or '').strip()
+
+    if len(title) < 3 and len(description) < 10:
+        return jsonify({'category': None})  # not enough text yet to bother guessing
+
+    from ai_analytics import suggest_form_category
+    category = suggest_form_category(title, description)
+    return jsonify({'category': category})
 @app.route('/complaint/new', methods=['GET', 'POST'])
 @login_required
 def new_complaint():
@@ -1274,11 +1452,21 @@ def new_complaint():
             priority=form.priority.data,
             user_id=current_user.id,
             mentor_id=mentor_id,
-            assigned_to=mentor_id
+            assigned_to=mentor_id,
+            deadline=compute_deadline(form.priority.data)
         )
         db.session.add(complaint)
         db.session.commit()
-        
+
+        # Real-time auto-response: replies immediately if the complaint matches a known pattern
+        run_auto_responder(complaint)
+
+        # Real-time AI categorization (Facility / Administration / Academic / etc.)
+        try:
+            classify_complaint(complaint)
+        except Exception:
+            app.logger.exception('AI classification failed for %s', complaint.complaint_id)
+
         send_complaint_registration_email(complaint)
         
         if mentor_id:
@@ -1331,10 +1519,12 @@ def view_complaints():
     category_filter = request.args.get('category', '')
     status_filter = request.args.get('status', '')
     assigned_to_filter = request.args.get('assigned_to', '')
-
+    department_filter = request.args.get('department', '')
+    if department_filter and is_super_admin(current_user):
+        query = query.join(User, Complaint.user_id == User.id).filter(User.department == department_filter)
     # ROLE BASED ACCESS
-    if current_user.role == 'super-admin':
-        query = Complaint.query
+    if is_super_admin(current_user):
+        query = Complaint.query.join(User, Complaint.user_id == User.id)
 
     elif current_user.role == 'admin':
         query = Complaint.query.join(User, Complaint.user_id == User.id).filter(
@@ -1360,10 +1550,13 @@ def view_complaints():
         )
 
     if category_filter:
-        query = query.filter_by(category=category_filter)
+        query = query.filter(Complaint.category == category_filter)
 
     if status_filter:
-        query = query.filter_by(status=status_filter)
+        query = query.filter(Complaint.status == status_filter)
+
+    if department_filter and is_super_admin(current_user):
+        query = query.filter(User.department == department_filter)
 
     from sqlalchemy import case
 
@@ -1375,18 +1568,28 @@ def view_complaints():
     )
     complaints = query.order_by(priority_order, Complaint.created_at.desc()).all()
 
-    categories = Complaint.query.with_entities(Complaint.category).distinct().all()
+    categories = [
+        ('academic', 'Academic'),
+        ('administrative', 'Administrative'),
+        ('facility', 'Facility'),
+        ('harassment', 'Harassment'),
+        ('technical', 'Technical'),
+        ('other', 'Other')
+    ]
     statuses = ['pending', 'in_progress', 'resolved', 'rejected']
+    departments = Department.query.order_by(Department.name).all() if is_super_admin(current_user) else []
 
     return render_template(
         'view_complaints.html',
         complaints=complaints,
-        categories=[c[0] for c in categories],
+        categories=categories,
         statuses=statuses,
         search_query=search_query,
         category_filter=category_filter,
         status_filter=status_filter,
-        assigned_to_filter=assigned_to_filter
+        assigned_to_filter=assigned_to_filter,
+        departments=departments,
+        department_filter=department_filter
     )
 @app.route('/complaints/export/pdf')
 @login_required
@@ -1401,7 +1604,9 @@ def export_complaints_pdf():
     search_query = request.args.get('search', '')
     category_filter = request.args.get('category', '')
     status_filter = request.args.get('status', '')
-
+    department_filter = request.args.get('department', '')
+    if department_filter and is_super_admin(current_user):
+        query = query.join(User, Complaint.user_id == User.id).filter(User.department == department_filter)
     # Same role-based access logic as view_complaints
     if is_super_admin(current_user):
         query = Complaint.query
@@ -1650,7 +1855,7 @@ def complaint_details(complaint_id):
                 'status_update'
             )
             send_status_update_email(complaint, old_status)
-            
+            notify_merged_duplicate_authors(complaint, old_status)
         flash('Complaint updated successfully!', 'success')
         return redirect(url_for('complaint_details', complaint_id=complaint.id))
     
@@ -1682,6 +1887,7 @@ def resolve_complaint(complaint_id):
         'status_update'
     )
     send_status_update_email(complaint, old_status)
+    notify_merged_duplicate_authors(complaint, old_status)
     
     flash(f'Complaint marked as resolved!', 'success')
     return redirect(url_for('complaint_details', complaint_id=complaint.id))
@@ -1767,7 +1973,7 @@ def api_update_status(complaint_id):
         f'Your complaint status has been updated from {old_status} to {new_status} by {current_user.username}',
         'status_update'
     )
-    
+    notify_merged_duplicate_authors(complaint, old_status) 
     return jsonify({'success': True})
 
 
@@ -1782,12 +1988,15 @@ def department_users():
     users = User.query.filter_by(department=current_user.department).all()
     staff = get_department_staff(current_user.department)
 
-    # Distinct sections in this department, for the filter dropdown
+    # Distinct sections and years in this department, for the filter dropdowns
     all_dept_students = get_department_students(current_user.department)
     sections = sorted({s.section for s in all_dept_students if s.section})
+    years = sorted({s.year for s in all_dept_students if s.year})
 
     # No "All Sections" option -- default to the first section if none chosen
     section_filter = request.args.get('section', '') or (sections[0] if sections else '')
+    # Year filter DOES have an "All Years" option -- empty string means no year filter applied
+    year_filter = request.args.get('year', '')
 
     import re
 
@@ -1804,6 +2013,8 @@ def department_users():
     students_query = User.query.filter_by(department=current_user.department, role='student')
     if section_filter:
         students_query = students_query.filter_by(section=section_filter)
+    if year_filter:
+        students_query = students_query.filter_by(year=year_filter)
     students = sorted(students_query.all(), key=roll_number_sort_key)
     # Look up actual mentor from StudentStaffAssignment (mentor_name field is unused)
     student_mentors = {}
@@ -1819,7 +2030,9 @@ def department_users():
                          department=current_user.department,
                          student_mentors=student_mentors,
                          sections=sections,
-                         section_filter=section_filter)
+                         section_filter=section_filter,
+                         years=years,
+                         year_filter=year_filter)
 @app.route('/department/user/<int:user_id>/change-role/<string:role>')
 @login_required
 def department_change_user_role(user_id, role):
@@ -2020,6 +2233,217 @@ Thank you
         return redirect(url_for('department_users'))
     
     return render_template('add_department_staff.html', department=current_user.department)
+
+
+# ========== CSV BULK IMPORT ==========
+
+BULK_IMPORT_REQUIRED_COLUMNS = {'username', 'email', 'role'}
+BULK_IMPORT_STUDENT_COLUMNS = ['roll_number', 'year', 'section', 'phone', 'parent_name', 'parent_phone', 'address']
+
+
+@app.route('/bulk-import/template/<string:role>')
+@login_required
+def bulk_import_template(role):
+    """Download a sample CSV template for bulk import."""
+    if not (is_super_admin(current_user) or is_department_admin(current_user)):
+        abort(403)
+
+    if role not in ('student', 'staff'):
+        abort(404)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    base_columns = ['username', 'email', 'role']
+    if is_super_admin(current_user):
+        base_columns.append('department')
+
+    if role == 'student':
+        columns = base_columns + BULK_IMPORT_STUDENT_COLUMNS
+        sample = ['jane_doe', 'jane.doe@example.com', 'student']
+        if is_super_admin(current_user):
+            sample.append('Computer Science')
+        sample += ['CS2024001', '2nd Year', 'A', '9876543210', 'John Doe', '9876543211', '123 Main St']
+    else:
+        columns = base_columns
+        sample = ['staff_smith', 'staff.smith@example.com', 'staff']
+        if is_super_admin(current_user):
+            sample.append('Computer Science')
+
+    writer.writerow(columns)
+    writer.writerow(sample)
+
+    response = make_response(output.getvalue())
+    response.headers['Content-Type'] = 'text/csv'
+    response.headers['Content-Disposition'] = f'attachment; filename={role}_import_template.csv'
+    return response
+
+
+@app.route('/bulk-import', methods=['GET', 'POST'])
+@login_required
+def bulk_import():
+    """Bulk import students and/or staff from a CSV file."""
+    if not (is_super_admin(current_user) or is_department_admin(current_user)):
+        abort(403)
+
+    if request.method == 'GET':
+        departments = Department.query.order_by(Department.name).all() if is_super_admin(current_user) else []
+        return render_template('bulk_import.html', departments=departments)
+
+    file = request.files.get('csv_file')
+    if not file or file.filename == '':
+        flash('Please choose a CSV file to upload.', 'danger')
+        return redirect(url_for('bulk_import'))
+
+    if not file.filename.lower().endswith('.csv'):
+        flash('Only .csv files are supported.', 'danger')
+        return redirect(url_for('bulk_import'))
+
+    try:
+        stream = io.StringIO(file.stream.read().decode('utf-8-sig'))
+        reader = csv.DictReader(stream)
+    except Exception as e:
+        flash(f'Could not read the CSV file: {e}', 'danger')
+        return redirect(url_for('bulk_import'))
+
+    if reader.fieldnames is None:
+        flash('The CSV file appears to be empty.', 'danger')
+        return redirect(url_for('bulk_import'))
+
+    headers = {h.strip().lower() for h in reader.fieldnames if h}
+    missing_columns = BULK_IMPORT_REQUIRED_COLUMNS - headers
+    if missing_columns:
+        flash(f'CSV is missing required column(s): {", ".join(sorted(missing_columns))}', 'danger')
+        return redirect(url_for('bulk_import'))
+
+    created_users = []
+    errors = []
+    seen_emails = set()
+    seen_usernames = set()
+    seen_roll_numbers = set()
+
+    departments_by_name = {d.name: d for d in Department.query.all()}
+
+    for row_num, raw_row in enumerate(reader, start=2):  # header is row 1
+        row = {(k or '').strip().lower(): (v or '').strip() for k, v in raw_row.items()}
+
+        username = row.get('username')
+        email = row.get('email')
+        role = row.get('role', '').lower()
+
+        row_label = username or email or f'row {row_num}'
+
+        if not username or not email or not role:
+            errors.append({'row': row_num, 'identifier': row_label, 'reason': 'Missing username, email, or role'})
+            continue
+
+        if role not in ('student', 'staff'):
+            errors.append({'row': row_num, 'identifier': row_label, 'reason': f"Role must be 'student' or 'staff', got '{role}'"})
+            continue
+
+        # Determine department
+        if is_super_admin(current_user):
+            department_name = row.get('department', '').strip()
+            if not department_name:
+                errors.append({'row': row_num, 'identifier': row_label, 'reason': 'Department is required'})
+                continue
+            if department_name not in departments_by_name:
+                errors.append({'row': row_num, 'identifier': row_label, 'reason': f"Unknown department '{department_name}'"})
+                continue
+        else:
+            department_name = current_user.department
+
+        # Duplicate checks (within file)
+        if email.lower() in seen_emails:
+            errors.append({'row': row_num, 'identifier': row_label, 'reason': 'Duplicate email within this file'})
+            continue
+        # Duplicate checks (against database) — username is a display name only
+        # (login uses email), so duplicate usernames across students are allowed.
+        if User.query.filter_by(email=email).first():
+            errors.append({'row': row_num, 'identifier': row_label, 'reason': 'Email already registered'})
+            continue
+
+        roll_number = row.get('roll_number') or None
+
+        # Guard against DB column-length overflows crashing the whole import
+        field_limits = {
+            'username': 80, 'email': 120, 'phone': 20, 'parent_phone': 50,
+            'roll_number': 20, 'department': 100, 'year': 20, 'section': 10,
+        }
+        overflow = None
+        for field_name, max_len in field_limits.items():
+            value = row.get(field_name) or (roll_number if field_name == 'roll_number' else None)
+            if value and len(value) > max_len:
+                overflow = f"{field_name} is too long ({len(value)} chars, max {max_len})"
+                break
+        if overflow:
+            errors.append({'row': row_num, 'identifier': row_label, 'reason': overflow})
+            continue
+        if role == 'student' and roll_number:
+            if roll_number.lower() in seen_roll_numbers:
+                errors.append({'row': row_num, 'identifier': row_label, 'reason': 'Duplicate roll number within this file'})
+                continue
+            if User.query.filter_by(roll_number=roll_number).first():
+                errors.append({'row': row_num, 'identifier': row_label, 'reason': 'Roll number already exists'})
+                continue
+
+        hashed_password = generate_password_hash(generate_random_password())
+
+        user = User(
+            username=username,
+            email=email,
+            password=hashed_password,
+            role=role,
+            department=department_name,
+        )
+
+        if role == 'student':
+            user.roll_number = roll_number
+            user.year = row.get('year') or None
+            user.section = row.get('section') or None
+            user.phone = row.get('phone') or None
+            user.parent_name = row.get('parent_name') or None
+            user.parent_phone = row.get('parent_phone') or None
+            user.address = row.get('address') or None
+
+        seen_emails.add(email.lower())
+        if roll_number:
+            seen_roll_numbers.add(roll_number.lower())
+
+        db.session.add(user)
+        created_users.append(user)
+
+    if created_users:
+        try:
+            db.session.commit()
+        except IntegrityError as e:
+            db.session.rollback()
+            flash(f'Import failed due to a database conflict: {e}', 'danger')
+            return redirect(url_for('bulk_import'))
+
+        # Best-effort welcome emails; failures here don't roll back the import.
+        emailed = 0
+        for user in created_users:
+            try:
+                sent = (
+                    send_csv_imported_student_email(user)
+                    if user.role == 'student'
+                    else send_csv_imported_staff_email(user)
+                )
+                if sent:
+                    emailed += 1
+            except Exception as e:
+                print(f"❌ Error emailing imported user {user.username}: {e}")
+
+        flash(
+            f'Imported {len(created_users)} user(s) successfully. '
+            f'Welcome emails sent to {emailed}/{len(created_users)}.',
+            'success'
+        )
+    else:
+        flash('No users were imported.', 'warning')
+
+    return render_template('bulk_import_results.html', created_users=created_users, errors=errors)
 
 
 @app.route('/assign-students')
@@ -2308,15 +2732,28 @@ def super_admin_users():
 
     departments = Department.query.order_by(Department.name).all()
     department_filter = request.args.get('department', '') or (departments[0].name if departments else '')
+    year_filter = request.args.get('year', '')
+    section_filter = request.args.get('section', '')
 
     all_users_query = User.query
     if department_filter:
         all_users_query = all_users_query.filter_by(department=department_filter)
     all_users = all_users_query.order_by(User.id).all()
+
+    # Year/section options are scoped to the currently selected department,
+    # so the dropdowns only ever show values that actually exist there.
+    years = sorted({u.year for u in all_users if u.role == 'student' and u.year})
+    sections = sorted({u.section for u in all_users if u.role == 'student' and u.section})
+
     students = sorted(
         [u for u in all_users if u.role == 'student'],
         key=roll_number_sort_key
     )
+    if year_filter:
+        students = [s for s in students if s.year == year_filter]
+    if section_filter:
+        students = [s for s in students if s.section == section_filter]
+
     staff = [u for u in all_users if u.role in ('staff', 'mentor')]
     others = [u for u in all_users if u.role not in ('student', 'staff', 'mentor')]
 
@@ -2336,7 +2773,11 @@ def super_admin_users():
         others=others,
         complaint_counts=complaint_counts,
         departments=departments,
-        department_filter=department_filter
+        department_filter=department_filter,
+        years=years,
+        year_filter=year_filter,
+        sections=sections,
+        section_filter=section_filter
     )
 
 @app.route('/admin/user/<int:user_id>/change-role/<string:role>')
@@ -2471,6 +2912,59 @@ def delete_department(id):
     flash("Department deleted successfully!", "success")
     return redirect(url_for('manage_departments'))  # ✅ FIXED
 
+@app.route('/analytics')
+@login_required
+def analytics_board():
+    if not (is_super_admin(current_user) or is_department_admin(current_user)):
+        abort(403)
+
+    categories = ['academic', 'administrative', 'facility', 'harassment', 'technical', 'other']
+    category_labels = {
+        'academic': 'Academic',
+        'administrative': 'Administrative',
+        'facility': 'Facility',
+        'harassment': 'Harassment',
+        'technical': 'Technical',
+        'other': 'Other'
+    }
+    statuses = ['pending', 'in_progress', 'resolved', 'rejected']
+
+    if is_super_admin(current_user):
+        base_query = Complaint.query
+        scope_label = 'All Departments'
+    else:
+        base_query = Complaint.query.join(User, Complaint.user_id == User.id).filter(
+            User.department == current_user.department
+        )
+        scope_label = current_user.department
+
+    category_totals = []
+    status_breakdown = {status: [] for status in statuses}
+
+    for cat in categories:
+        cat_complaints = base_query.filter(Complaint.category == cat).all()
+        category_totals.append(len(cat_complaints))
+        for status in statuses:
+            status_breakdown[status].append(
+                len([c for c in cat_complaints if c.status == status])
+            )
+
+    total_complaints = sum(category_totals)
+
+    # Needed by the template (it was previously undefined -> broke |tojson)
+    departments = Department.query.order_by(Department.name).all() if is_super_admin(current_user) else []
+
+    return render_template(
+        'analytics_board.html',
+        category_labels=[category_labels[c] for c in categories],
+        category_totals=category_totals,
+        status_breakdown=status_breakdown,
+        statuses=statuses,
+        total_complaints=total_complaints,
+        scope_label=scope_label,
+        is_super_admin_view=is_super_admin(current_user),
+        departments=departments,
+    )
 # ========== NOTIFICATION & PROFILE ROUTES ==========
 
 @app.route('/notifications')
@@ -2695,12 +3189,200 @@ def test_email():
 
 # ========== CONTEXT PROCESSORS ==========
 
+@app.route('/api/analytics/complaints')
+@login_required
+def api_complaint_analytics():
+    """Analytics for the board: fixed-category breakdown (Academic/Administrative/
+    Facility/Harassment/Technical/Other, from the complaint form), AI-predicted
+    category breakdown, status/priority breakdown, monthly trend (last 6 months),
+    and auto-generated insights.
+    Query params:
+      ?days=30        - limit to last N days (does not affect the 6-month trend)
+      ?department=X   - (super admin only) drill into one department
+    """
+    if not (is_super_admin(current_user) or is_department_admin(current_user)):
+        abort(403)
+
+    from collections import Counter
+    from dateutil.relativedelta import relativedelta
+
+    days = request.args.get('days', type=int)
+    year_filter = request.args.get('year') or None
+    section_filter = request.args.get('section') or None
+    department = None
+
+    if is_department_admin(current_user) and not is_super_admin(current_user):
+        hod_dept = get_hod_department(current_user.id)
+        department = hod_dept.name if hod_dept else current_user.department
+    elif is_super_admin(current_user):
+        department = request.args.get('department') or None
+
+    base_query = Complaint.query.join(User, Complaint.user_id == User.id)
+    if department:
+        base_query = base_query.filter(User.department == department)
+    if year_filter:
+        base_query = base_query.filter(User.year == year_filter)
+    if section_filter:
+        base_query = base_query.filter(User.section == section_filter)
+
+    scoped_query = base_query
+    if days:
+        since = datetime.utcnow() - timedelta(days=days)
+        scoped_query = scoped_query.filter(Complaint.created_at >= since)
+
+    complaints = scoped_query.all()
+
+    FORM_CATEGORIES = ['academic', 'administrative', 'facility', 'harassment', 'technical', 'other']
+    FORM_CATEGORY_LABELS = {
+        'academic': 'Academic',
+        'administrative': 'Administrative',
+        'facility': 'Facility',
+        'harassment': 'Harassment',
+        'technical': 'Technical',
+        'other': 'Other'
+    }
+
+    category_counts = Counter(c.category for c in complaints)
+    by_category = {FORM_CATEGORY_LABELS[cat]: category_counts.get(cat, 0) for cat in FORM_CATEGORIES}
+    by_ai_category = dict(Counter(c.ai_category or 'Uncategorized' for c in complaints))
+    by_status = dict(Counter(c.status for c in complaints))
+    
+    by_priority = dict(Counter(c.priority for c in complaints))
+
+    total = len(complaints)
+    resolved = by_status.get('resolved', 0)
+    resolution_rate = round((resolved / total * 100) if total else 0, 1)
+
+    # Per-category pending count and resolution rate, for insights
+    per_cat_pending = {}
+    per_cat_resolution = {}
+    per_cat_high_priority = {}
+    for cat in FORM_CATEGORIES:
+        cat_complaints = [c for c in complaints if c.category == cat]
+        label = FORM_CATEGORY_LABELS[cat]
+        per_cat_pending[label] = sum(1 for c in cat_complaints if c.status == 'pending')
+        per_cat_resolution[label] = round(
+            (sum(1 for c in cat_complaints if c.status == 'resolved') / len(cat_complaints) * 100)
+            if cat_complaints else 0, 1
+        )
+        per_cat_high_priority[label] = sum(1 for c in cat_complaints if c.priority == 'high')
+
+    # ----- Monthly trend: last 6 months (independent of the `days` filter) -----
+    trend_query = Complaint.query.join(User, Complaint.user_id == User.id)
+    if department:
+        trend_query = trend_query.filter(User.department == department)
+    if year_filter:
+        trend_query = trend_query.filter(User.year == year_filter)
+    if section_filter:
+        trend_query = trend_query.filter(User.section == section_filter)
+
+    six_months_ago = (datetime.utcnow() - relativedelta(months=5)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    trend_complaints = trend_query.filter(Complaint.created_at >= six_months_ago).all()
+
+    month_labels = []
+    month_keys = []
+    cursor = six_months_ago
+    for _ in range(6):
+        month_labels.append(cursor.strftime('%b %Y'))
+        month_keys.append(cursor.strftime('%Y-%m'))
+        cursor = cursor + relativedelta(months=1)
+
+    month_counts = Counter(c.created_at.strftime('%Y-%m') for c in trend_complaints)
+    monthly_trend = [month_counts.get(k, 0) for k in month_keys]
+
+    # ----- Auto-generated insights -----
+    insights = []
+    categories_with_data = {k: v for k, v in by_category.items() if v > 0}
+    if categories_with_data:
+        top_category = max(categories_with_data, key=categories_with_data.get)
+        insights.append(f'<strong>{top_category}</strong> is the most frequently reported category ({categories_with_data[top_category]} complaints).')
+
+        top_pending_cat = max(per_cat_pending, key=per_cat_pending.get)
+        if per_cat_pending[top_pending_cat] > 0:
+            insights.append(f'<strong>{top_pending_cat}</strong> has the highest number of pending complaints and may need attention.')
+
+        cats_with_complaints = {k: v for k, v in per_cat_resolution.items() if by_category.get(k, 0) > 0}
+        if cats_with_complaints:
+            best_resolution_cat = max(cats_with_complaints, key=cats_with_complaints.get)
+            insights.append(f'<strong>{best_resolution_cat}</strong> has the best resolution rate among categories with complaints.')
+
+        top_priority_cat = max(per_cat_high_priority, key=per_cat_high_priority.get)
+        if per_cat_high_priority[top_priority_cat] > 0:
+            insights.append(f'<strong>{top_priority_cat}</strong> has the most high-priority complaints.')
+    else:
+        insights.append('No complaints in this scope yet.')
+
+    scope_parts = [department or 'All Departments']
+    if year_filter:
+        scope_parts.append(year_filter)
+    if section_filter:
+        scope_parts.append(f'Section {section_filter}')
+
+    return jsonify({
+        'total': total,
+        'resolved': resolved,
+        'resolution_rate': resolution_rate,
+        'by_category': by_category,
+        'by_ai_category': by_ai_category,
+        'by_status': by_status,
+        'by_priority': by_priority,
+        'category_resolution_rate': per_cat_resolution,
+        'monthly_trend_labels': month_labels,
+        'monthly_trend_values': monthly_trend,
+        'insights': insights,
+        'scope': ' - '.join(scope_parts)
+    })
+
+
+@app.route('/api/analytics/departments')
+@login_required
+def api_department_analytics():
+    """Super admin only: per-department totals and resolution rates, for
+    the department-wise comparison chart on the analytics board."""
+    if not is_super_admin(current_user):
+        abort(403)
+
+    days = request.args.get('days', type=int)
+    departments = Department.query.order_by(Department.name).all()
+
+    result = []
+    for dept in departments:
+        query = Complaint.query.join(User, Complaint.user_id == User.id).filter(User.department == dept.name)
+        if days:
+            since = datetime.utcnow() - timedelta(days=days)
+            query = query.filter(Complaint.created_at >= since)
+        complaints = query.all()
+        total = len(complaints)
+        resolved = sum(1 for c in complaints if c.status == 'resolved')
+        result.append({
+            'department': dept.name,
+            'total': total,
+            'resolved': resolved,
+            'resolution_rate': round((resolved / total * 100) if total else 0, 1)
+        })
+
+    return jsonify(result)
+
+def get_merge_original(complaint):
+    """If this complaint was merged as a duplicate, return the original it was merged into."""
+    if complaint.is_duplicate_of:
+        return Complaint.query.get(complaint.is_duplicate_of)
+    return None
+
+
+def get_duplicate_count(complaint):
+    """How many other complaints were merged into this one."""
+    return Complaint.query.filter_by(is_duplicate_of=complaint.id).count()
+
+
 @app.context_processor
 def utility_processor():
     return {
         'is_super_admin': is_super_admin,
         'is_department_admin': is_department_admin,
-        'can_manage_user': can_manage_user
+        'can_manage_user': can_manage_user,
+        'get_merge_original': get_merge_original,
+        'get_duplicate_count': get_duplicate_count,
     }
 
 

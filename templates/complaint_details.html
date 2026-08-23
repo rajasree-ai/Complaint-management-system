@@ -6,7 +6,21 @@
         <div class="card mb-4">
             <div class="card-header">
                 <div class="d-flex justify-content-between align-items-center">
-                    <h4 class="mb-0">Complaint #{{ complaint.complaint_id }}</h4>
+                    <h4 class="mb-0">
+                        Complaint #{{ complaint.complaint_id }}
+                        {% set original = get_merge_original(complaint) %}
+                        {% if original %}
+                            <a href="{{ url_for('complaint_details', complaint_id=original.id) }}" class="badge bg-dark text-decoration-none" title="This complaint was merged into {{ original.complaint_id }}">
+                                <i class="fas fa-code-merge me-1"></i>Merged → {{ original.complaint_id }}
+                            </a>
+                        {% endif %}
+                        {% set dup_count = get_duplicate_count(complaint) %}
+                        {% if dup_count > 0 %}
+                            <span class="badge bg-info" title="{{ dup_count }} other student(s) reported the same issue">
+                                <i class="fas fa-users me-1"></i>{{ dup_count }} similar report{{ 's' if dup_count > 1 else '' }}
+                            </span>
+                        {% endif %}
+                    </h4>
                     <span class="badge" 
                         {% if complaint.status == 'pending' %}
                         style="background-color: #ffc107; color: #000;"
@@ -277,6 +291,16 @@
                             {% endif %}>
                             {{ complaint.status }}
                         </span>
+                    </li>
+                                        <li class="mb-2">
+                        <strong>Deadline:</strong><br>
+                        {% if complaint.deadline %}
+                            <span class="deadline-badge" data-deadline="{{ complaint.deadline.strftime('%Y-%m-%dT%H:%M:%S') }}Z">
+                                Calculating...
+                            </span>
+                        {% else %}
+                            <span class="badge bg-secondary">No deadline</span>
+                        {% endif %}
                     </li>
                     <li class="mb-2">
                         <strong>Created:</strong><br>

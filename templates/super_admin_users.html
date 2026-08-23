@@ -27,6 +27,28 @@
                             {% endfor %}
                         </select>
                     </div>
+                    <div class="col-md-4">
+                        <label class="form-label mb-1">Filter by Year</label>
+                        <select name="year" class="form-select" onchange="this.form.submit()">
+                            <option value="" {% if not year_filter %}selected{% endif %}>All Years</option>
+                            {% for yr in years %}
+                            <option value="{{ yr }}" {% if year_filter == yr %}selected{% endif %}>
+                                {{ yr }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label mb-1">Filter by Section</label>
+                        <select name="section" class="form-select" onchange="this.form.submit()">
+                            <option value="" {% if not section_filter %}selected{% endif %}>All Sections</option>
+                            {% for sec in sections %}
+                            <option value="{{ sec }}" {% if section_filter == sec %}selected{% endif %}>
+                                Section {{ sec }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
                 </form>
             </div>
         </div>

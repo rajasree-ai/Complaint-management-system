@@ -1,0 +1,317 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+                <h2><i class="fas fa-chart-bar me-2"></i>Analytics Board</h2>
+                <p class="text-muted mb-0" id="scopeLabel">Loading...</p>
+            </div>
+            <div class="d-flex gap-2">
+                {% if is_super_admin_view %}
+                <select id="departmentSelect" class="form-select form-select-sm" style="width: auto;">
+                    <option value="">All Departments</option>
+                    {% for dept in departments %}
+                    <option value="{{ dept.name }}">{{ dept.name }}</option>
+                    {% endfor %}
+                </select>
+                {% endif %}
+                <select id="yearSelect" class="form-select form-select-sm" style="width: auto;">
+                    <option value="">All Years</option>
+                    {% if is_super_admin_view %}
+                    <option value="1st Year">1st Year</option>
+                    {% endif %}
+                    <option value="2nd Year">2nd Year</option>
+                    <option value="3rd Year">3rd Year</option>
+                    <option value="4th Year">4th Year</option>
+                </select>
+                <select id="sectionSelect" class="form-select form-select-sm" style="width: auto;">
+                    <option value="">All Sections</option>
+                    <option value="A">Section A</option>
+                    <option value="B">Section B</option>
+                    <option value="C">Section C</option>
+                </select>
+                <select id="daysSelect" class="form-select form-select-sm" style="width: auto;">
+                    <option value="">All Time</option>
+                    <option value="7">Last 7 days</option>
+                    <option value="30" selected>Last 30 days</option>
+                    <option value="90">Last 90 days</option>
+                </select>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- KPI Cards -->
+<div class="row mb-4">
+    <div class="col-md-4 mb-3">
+        <div class="card text-white bg-primary h-100">
+            <div class="card-body text-center">
+                <h6 class="card-title">Total Complaints</h6>
+                <h2 class="mb-0" id="kpiTotal">-</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 mb-3">
+        <div class="card text-white bg-success h-100">
+            <div class="card-body text-center">
+                <h6 class="card-title">Resolved</h6>
+                <h2 class="mb-0" id="kpiResolved">-</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 mb-3">
+        <div class="card text-white bg-info h-100">
+            <div class="card-body text-center">
+                <h6 class="card-title">Resolution Rate</h6>
+                <h2 class="mb-0" id="kpiRate">-</h2>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header"><h5 class="mb-0"><i class="fas fa-lightbulb me-2"></i>Insights</h5></div>
+            <div class="card-body">
+                <ul class="mb-0" id="insightsList">
+                    <li class="text-muted">Loading insights...</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header"><h5 class="mb-0"><i class="fas fa-tags me-2"></i>Complaints by Category (Student-Selected)</h5></div>
+            <div class="card-body"><canvas id="categoryChart" height="240"></canvas></div>
+        </div>
+    </div>
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header"><h5 class="mb-0"><i class="fas fa-robot me-2"></i>Complaints by Category (AI-Predicted)</h5></div>
+            <div class="card-body"><canvas id="aiCategoryChart" height="240"></canvas></div>
+        </div>
+    </div>
+</div>
+<div class="row">
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header"><h5 class="mb-0"><i class="fas fa-chart-line me-2"></i>Monthly Trend (Last 6 Months)</h5></div>
+            <div class="card-body"><canvas id="trendChart" height="240"></canvas></div>
+        </div>
+    </div>
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header"><h5 class="mb-0"><i class="fas fa-percentage me-2"></i>Category Resolution Rate</h5></div>
+            <div class="card-body"><canvas id="categoryResolutionChart" height="240"></canvas></div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header"><h5 class="mb-0"><i class="fas fa-layer-group me-2"></i>Status Breakdown</h5></div>
+            <div class="card-body"><canvas id="statusChart" height="240"></canvas></div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-12 mb-4">
+        <div class="card h-100">
+            <div class="card-header"><h5 class="mb-0"><i class="fas fa-exclamation-circle me-2"></i>Priority Breakdown</h5></div>
+            <div class="card-body"><canvas id="priorityChart" height="150"></canvas></div>
+        </div>
+    </div>
+</div>
+
+{% if is_super_admin_view %}
+<div class="row">
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header"><h5 class="mb-0"><i class="fas fa-building me-2"></i>Department-wise Comparison</h5></div>
+            <div class="card-body"><canvas id="departmentChart" height="150"></canvas></div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var charts = {};
+    var isSuperAdmin = {{ is_super_admin_view|tojson }};
+
+    function destroyChart(id) {
+        if (charts[id]) { charts[id].destroy(); }
+    }
+
+    function buildQuery() {
+        var params = new URLSearchParams();
+        var days = document.getElementById('daysSelect').value;
+        if (days) params.set('days', days);
+        if (isSuperAdmin) {
+            var dept = document.getElementById('departmentSelect').value;
+            if (dept) params.set('department', dept);
+        }
+        var year = document.getElementById('yearSelect').value;
+        if (year) params.set('year', year);
+        var section = document.getElementById('sectionSelect').value;
+        if (section) params.set('section', section);
+        return params.toString();
+    }
+
+        function renderInsights(insights) {
+        var list = document.getElementById('insightsList');
+        list.innerHTML = '';
+        insights.forEach(function (text) {
+            var li = document.createElement('li');
+            li.innerHTML = text;
+            list.appendChild(li);
+        });
+    }
+
+    function loadMainAnalytics() {
+        fetch('/api/analytics/complaints?' + buildQuery())
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                document.getElementById('scopeLabel').textContent = 'Scope: ' + data.scope;
+                document.getElementById('kpiTotal').textContent = data.total;
+                document.getElementById('kpiResolved').textContent = data.resolved;
+                document.getElementById('kpiRate').textContent = data.resolution_rate + '%';
+
+                renderInsights(data.insights);
+
+                var catLabels = Object.keys(data.by_category);
+                var catValues = Object.values(data.by_category);
+                destroyChart('category');
+                charts.category = new Chart(document.getElementById('categoryChart').getContext('2d'), {
+                    type: 'bar',
+                    data: { labels: catLabels, datasets: [{ label: 'Complaints', data: catValues, backgroundColor: catLabels.map(function (_, i) {
+                        var palette = ['#2b7cff', '#ff9f1c', '#28a745', '#dc3545', '#6f42c1', '#17a2b8'];
+                        return palette[i % palette.length];
+                    }), borderRadius: 4 }] },
+                    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+                });
+                var aiCatLabels = Object.keys(data.by_ai_category);
+                var aiCatValues = Object.values(data.by_ai_category);
+                destroyChart('aiCategory');
+                charts.aiCategory = new Chart(document.getElementById('aiCategoryChart').getContext('2d'), {
+                    type: 'bar',
+                    data: { labels: aiCatLabels, datasets: [{ label: 'Complaints', data: aiCatValues, backgroundColor: aiCatLabels.map(function (_, i) {
+                        var palette = ['#e63946', '#2a9d8f', '#e9c46a', '#264653', '#f4a261', '#8ecae6', '#9b5de5', '#00bbf9', '#adb5bd'];
+                        return palette[i % palette.length];
+                    }), borderRadius: 4 }] },
+                    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+                });
+
+                destroyChart('trend');
+                destroyChart('trend');
+                charts.trend = new Chart(document.getElementById('trendChart').getContext('2d'), {
+                    type: 'line',
+                    data: {
+                        labels: data.monthly_trend_labels,
+                        datasets: [{
+                            label: 'Complaints',
+                            data: data.monthly_trend_values,
+                            borderColor: '#667eea',
+                            backgroundColor: 'rgba(102, 126, 234, 0.15)',
+                            fill: true,
+                            tension: 0.3,
+                            pointRadius: 4
+                        }]
+                    },
+                    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+                });
+
+                var statusColors = { pending: '#ffc107', in_progress: '#17a2b8', resolved: '#28a745', rejected: '#dc3545' };
+                var statusLabels = Object.keys(data.by_status);
+                var statusValues = Object.values(data.by_status);
+                destroyChart('status');
+                charts.status = new Chart(document.getElementById('statusChart').getContext('2d'), {
+                    type: 'doughnut',
+                    data: {
+                        labels: statusLabels.map(function (s) { return s.replace('_', ' '); }),
+                        datasets: [{ data: statusValues, backgroundColor: statusLabels.map(function (s) { return statusColors[s] || '#6c757d'; }) }]
+                    },
+                    options: { responsive: true, cutout: '60%' }
+                });
+
+                var priorityColors = { high: '#dc3545', medium: '#ffc107', low: '#17a2b8' };
+                var prioLabels = Object.keys(data.by_priority);
+                var prioValues = Object.values(data.by_priority);
+                destroyChart('priority');
+                charts.priority = new Chart(document.getElementById('priorityChart').getContext('2d'), {
+                    type: 'bar',
+                    data: { labels: prioLabels, datasets: [{ label: 'Complaints', data: prioValues, backgroundColor: prioLabels.map(function (p) { return priorityColors[p] || '#6c757d'; }) }] },
+                    options: { responsive: true, indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+                });
+
+                var resLabels = Object.keys(data.category_resolution_rate);
+                var resValues = Object.values(data.category_resolution_rate);
+                destroyChart('categoryResolution');
+                charts.categoryResolution = new Chart(document.getElementById('categoryResolutionChart').getContext('2d'), {
+                    type: 'bar',
+                    data: { labels: resLabels, datasets: [{ label: 'Resolution %', data: resValues, backgroundColor: '#28a745', borderRadius: 4 }] },
+                    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, max: 100 } } }
+                });
+            });
+    }
+
+    function loadDepartmentComparison() {
+        if (!isSuperAdmin) return;
+        var params = new URLSearchParams();
+        var days = document.getElementById('daysSelect').value;
+        if (days) params.set('days', days);
+
+        fetch('/api/analytics/departments?' + params.toString())
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                var labels = data.map(function (d) { return d.department; });
+                var totals = data.map(function (d) { return d.total; });
+                var rates = data.map(function (d) { return d.resolution_rate; });
+
+                destroyChart('department');
+                charts.department = new Chart(document.getElementById('departmentChart').getContext('2d'), {
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            { type: 'bar', label: 'Total Complaints', data: totals, backgroundColor: '#667eea', yAxisID: 'y' },
+                            { type: 'line', label: 'Resolution Rate %', data: rates, borderColor: '#28a745', backgroundColor: '#28a745', yAxisID: 'y1', tension: 0.3 }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        scales: {
+                            y: { beginAtZero: true, position: 'left', title: { display: true, text: 'Complaints' } },
+                            y1: { beginAtZero: true, max: 100, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Resolution %' } }
+                        }
+                    }
+                });
+            });
+    }
+
+    function refreshAll() {
+        loadMainAnalytics();
+        loadDepartmentComparison();
+    }
+
+    document.getElementById('daysSelect').addEventListener('change', refreshAll);
+    if (isSuperAdmin) {
+        document.getElementById('departmentSelect').addEventListener('change', loadMainAnalytics);
+    }
+    document.getElementById('yearSelect').addEventListener('change', loadMainAnalytics);
+    document.getElementById('sectionSelect').addEventListener('change', loadMainAnalytics);
+
+    refreshAll();
+});
+</script>
+{% endblock %}

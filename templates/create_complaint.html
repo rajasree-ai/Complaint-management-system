@@ -39,8 +39,14 @@
                     
                     <div class="row mb-3">
                         <div class="col-md-6">
-                            {{ form.category.label(class="form-label") }}
+                            <div class="d-flex justify-content-between align-items-center">
+                                {{ form.category.label(class="form-label mb-0") }}
+                                <a href="#" id="aiSuggestBtn" class="small text-primary text-decoration-none">
+                                    <i class="fas fa-wand-magic-sparkles me-1"></i><span id="aiSuggestLabel">AI Suggest</span>
+                                </a>
+                            </div>
                             {{ form.category(class="form-select") }}
+                            <small id="aiSuggestResult" class="text-muted d-none mt-1 d-block"></small>
                         </div>
                         <div class="col-md-6">
                             {{ form.priority.label(class="form-label") }}
@@ -64,7 +70,13 @@
                     {% endif %}
                     
                     <div class="mb-3">
-                        {{ form.description.label(class="form-label") }}
+                        <div class="d-flex justify-content-between align-items-center">
+                            {{ form.description.label(class="form-label mb-0") }}
+                            <button type="button" id="micBtn" class="btn btn-sm btn-outline-secondary" title="Dictate complaint">
+                                <i class="fas fa-microphone" id="micIcon"></i>
+                                <span id="micLabel">Speak</span>
+                            </button>
+                        </div>
                         {% if form.description.errors %}
                             {{ form.description(class="form-control is-invalid", rows=5, placeholder="Provide detailed description of your complaint") }}
                             <div class="invalid-feedback">
@@ -75,6 +87,7 @@
                         {% else %}
                             {{ form.description(class="form-control", rows=5, placeholder="Provide detailed description of your complaint") }}
                         {% endif %}
+                        <small id="micStatus" class="text-muted d-none"></small>
                     </div>
                     
                     <hr class="my-4">
@@ -90,4 +103,146 @@
         </div>
     </div>
 </div>
+
+<script>
+(function () {
+    const micBtn = document.getElementById('micBtn');
+    const micIcon = document.getElementById('micIcon');
+    const micLabel = document.getElementById('micLabel');
+    const micStatus = document.getElementById('micStatus');
+    const textarea = document.getElementById('{{ form.description.id }}');
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition || !textarea) {
+        // Browser doesn't support it (or field not found) — hide the button, typing still works fine.
+        if (micBtn) micBtn.classList.add('d-none');
+        return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    let listening = false;
+    let baseText = '';       // text already in the box before this listening session
+    let finalTranscript = ''; // finalized speech this session
+
+    function setListeningUI(on) {
+        listening = on;
+        micBtn.classList.toggle('btn-outline-secondary', !on);
+        micBtn.classList.toggle('btn-danger', on);
+        micIcon.classList.toggle('fa-microphone', !on);
+        micIcon.classList.toggle('fa-stop', on);
+        micLabel.textContent = on ? 'Stop' : 'Speak';
+        micStatus.classList.toggle('d-none', !on);
+        micStatus.textContent = on ? 'Listening… speak your complaint' : '';
+    }
+
+    micBtn.addEventListener('click', function () {
+        if (listening) {
+            recognition.stop();
+            return;
+        }
+        baseText = textarea.value ? textarea.value.trim() + ' ' : '';
+        finalTranscript = '';
+        try {
+            recognition.start();
+            setListeningUI(true);
+        } catch (e) {
+            console.error('Speech recognition failed to start:', e);
+        }
+    });
+
+    recognition.addEventListener('result', function (event) {
+        let interim = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+                finalTranscript += transcript + ' ';
+            } else {
+                interim += transcript;
+            }
+        }
+        textarea.value = (baseText + finalTranscript + interim).trim();
+    });
+
+    recognition.addEventListener('error', function (event) {
+        console.error('Speech recognition error:', event.error);
+        micStatus.textContent = 'Mic error: ' + event.error + '. You can keep typing instead.';
+        setListeningUI(false);
+    });
+
+    recognition.addEventListener('end', function () {
+        setListeningUI(false);
+    });
+})();
+</script>
+
+<script>
+(function () {
+    const titleField = document.getElementById('{{ form.title.id }}');
+    const descField = document.getElementById('{{ form.description.id }}');
+    const categorySelect = document.getElementById('{{ form.category.id }}');
+    const suggestBtn = document.getElementById('aiSuggestBtn');
+    const suggestLabel = document.getElementById('aiSuggestLabel');
+    const resultText = document.getElementById('aiSuggestResult');
+
+    if (!titleField || !descField || !categorySelect || !suggestBtn) return;
+
+    const CATEGORY_LABELS = {
+        academic: 'Academic',
+        administrative: 'Administrative',
+        facility: 'Facility',
+        harassment: 'Harassment',
+        technical: 'Technical',
+        other: 'Other'
+    };
+
+    suggestBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+
+        const title = titleField.value.trim();
+        const description = descField.value.trim();
+
+        if (title.length < 3 && description.length < 10) {
+            resultText.textContent = 'Type a bit more in the title or description first.';
+            resultText.classList.remove('d-none');
+            return;
+        }
+
+        suggestLabel.textContent = 'Thinking...';
+        suggestBtn.classList.add('disabled');
+        resultText.classList.add('d-none');
+
+        fetch('/api/suggest-category', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: title, description: description })
+        })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                suggestLabel.textContent = 'AI Suggest';
+                suggestBtn.classList.remove('disabled');
+
+                if (!data.category) {
+                    resultText.textContent = 'Not enough detail to suggest a category yet.';
+                    resultText.classList.remove('d-none');
+                    return;
+                }
+
+                categorySelect.value = data.category;
+                resultText.textContent = 'Suggested: ' + (CATEGORY_LABELS[data.category] || data.category);
+                resultText.classList.remove('d-none');
+            })
+            .catch(function () {
+                suggestLabel.textContent = 'AI Suggest';
+                suggestBtn.classList.remove('disabled');
+                resultText.textContent = 'Could not get a suggestion right now.';
+                resultText.classList.remove('d-none');
+            });
+    });
+})();
+</script>
 {% endblock %}

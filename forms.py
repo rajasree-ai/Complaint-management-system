@@ -41,11 +41,7 @@ class RegistrationForm(FlaskForm):
         departments = Department.query.order_by(Department.name).all()
         self.department.choices = [(d.name, d.name) for d in departments] if departments else [('', 'No departments available')]
     
-    def validate_username(self, username):
-        from models import User
-        user = User.query.filter_by(username=username.data).first()
-        if user:
-            raise ValidationError('Username already exists.')
+
     
     def validate_email(self, email):
         from models import User
@@ -216,19 +212,3 @@ class UpdateProfileForm(FlaskForm):
         existing = User.query.filter_by(roll_number=roll_number.data.strip()).first()
         if existing and (not self.target_user or existing.id != self.target_user.id):
             raise ValidationError('Roll number already exists.')
-
-    def __init__(self, target_user=None, *args, **kwargs):
-        super(UpdateProfileForm, self).__init__(*args, **kwargs)
-        self.target_user = target_user
-        departments = Department.query.order_by(Department.name).all()
-        self.department.choices = [(d.name, d.name) for d in departments] if departments else [('', 'No departments available')]
-
-    def validate_username(self, username):
-        user = User.query.filter_by(username=username.data).first()
-        if user and (not self.target_user or user.id != self.target_user.id):
-            raise ValidationError('Username already exists.')
-
-    def validate_email(self, email):
-        user = User.query.filter_by(email=email.data).first()
-        if user and (not self.target_user or user.id != self.target_user.id):
-            raise ValidationError('Email already registered.')

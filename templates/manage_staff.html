@@ -5,9 +5,14 @@
     <div class="col-12">
         <div class="d-flex justify-content-between align-items-center">
             <h2><i class="fas fa-chalkboard-teacher me-2"></i>Manage Staff - {{ department }}</h2>
-            <a href="{{ url_for('add_department_staff') }}" class="btn btn-primary">
-                <i class="fas fa-user-plus me-2"></i>Add New Staff
-            </a>
+            <div>
+                <a href="{{ url_for('bulk_import') }}" class="btn btn-outline-primary me-2">
+                    <i class="fas fa-file-import me-2"></i>Bulk Import
+                </a>
+                <a href="{{ url_for('add_department_staff') }}" class="btn btn-primary">
+                    <i class="fas fa-user-plus me-2"></i>Add New Staff
+                </a>
+            </div>
         </div>
         <p class="text-muted">View and manage staff members in your department</p>
     </div>

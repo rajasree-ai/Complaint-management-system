@@ -13,6 +13,15 @@ websockets==13.1
 realtime==2.30.0
 postgrest==2.30.0
 
+# Background job scheduling (escalation, assignment, duplicate detection, reminders, backups)
+apscheduler==3.10.4
+
+# Used for the 6-month analytics trend calculation
+python-dateutil==2.9.0
+
+# AI-based complaint classification (falls back to keyword matching if unavailable)
+openai==1.51.0
+
 # Production/runtime dependencies for Render
 gunicorn==23.0.0
 alembic==1.11.1

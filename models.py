@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import UUID
 
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
+    username = db.Column(db.String(80), nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password = db.Column(db.String(200), nullable=False)
     role = db.Column(db.String(20), default='student')  # student, staff/mentor, hod, admin
@@ -17,10 +17,10 @@ class User(UserMixin, db.Model):
     section = db.Column(db.String(10))
     roll_number = db.Column(db.String(20), nullable=True)
     parent_name = db.Column(db.String(100))
-    parent_phone = db.Column(db.String(15))
+    parent_phone = db.Column(db.String(50))
     address = db.Column(db.Text)
     mentor_name = db.Column(db.String(100))  # For students - who is their mentor
-    phone = db.Column(db.String(15))
+    phone = db.Column(db.String(20))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     # Relationships
@@ -54,7 +54,17 @@ class Complaint(db.Model):
     mentor_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)  # Make sure this exists
     # Free-text field to capture what action was taken for this complaint (e.g., interventions, fixes, notes)
     action_taken = db.Column(db.Text, nullable=True)
-    
+
+    # ===== Automation fields =====
+    deadline = db.Column(db.DateTime, nullable=True)  # SLA deadline computed from priority at creation
+    is_overdue = db.Column(db.Boolean, default=False)  # Set by the "Status Update" automation job
+    escalation_level = db.Column(db.Integer, default=0)  # 0=none, 1=escalated to HOD, 2=escalated to Principal/Admin
+    last_escalated_at = db.Column(db.DateTime, nullable=True)
+    last_reminded_at = db.Column(db.DateTime, nullable=True)  # Last time a deadline reminder was sent
+    is_duplicate_of = db.Column(db.Integer, db.ForeignKey('complaint.id'), nullable=True)  # Points to the original complaint
+    auto_response_sent = db.Column(db.Boolean, default=False)  # Whether the real-time auto-responder has replied
+    ai_category = db.Column(db.String(50), nullable=True)  # AI-classified category (Facility, Administration, etc.)
+
     comments = db.relationship('Comment', backref='complaint', lazy=True, cascade='all, delete-orphan')
     notifications = db.relationship('Notification', backref='complaint', lazy=True, cascade='all, delete-orphan')
 

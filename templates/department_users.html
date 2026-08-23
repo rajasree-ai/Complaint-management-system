@@ -27,6 +27,17 @@
             <div class="card-body">
                 <form method="GET" class="row g-3 align-items-end">
                     <div class="col-md-4">
+                        <label class="form-label mb-1">Filter by Year</label>
+                        <select name="year" class="form-select" onchange="this.form.submit()">
+                            <option value="" {% if not year_filter %}selected{% endif %}>All Years</option>
+                            {% for yr in years %}
+                            <option value="{{ yr }}" {% if year_filter == yr %}selected{% endif %}>
+                                {{ yr }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
                         <label class="form-label mb-1">Filter by Section</label>
                         <select name="section" class="form-select" onchange="this.form.submit()">
                             {% for sec in sections %}

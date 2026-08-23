@@ -1,6 +1,7 @@
 import random
 import string
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from models import Complaint, Notification, PasswordResetOTP, Department, User
 from database import db
@@ -123,10 +124,50 @@ Grievance Hub
 '''
     return send_email_notification(complaint.author.email, subject, body, mail)
 
+def notify_merged_duplicate_authors(original_complaint, old_status):
+    """When an original complaint's status changes, also notify every student
+    whose duplicate report was merged into it — so they get the same update
+    even though they're not the complaint's official author."""
+    from models import Complaint
+    duplicates = Complaint.query.filter_by(is_duplicate_of=original_complaint.id).all()
+    notified = 0
+    for dup in duplicates:
+        if not dup.author:
+            continue
+        create_notification(
+            dup.author.id,
+            original_complaint.id,
+            f'Update on {original_complaint.complaint_id} (your report {dup.complaint_id} was merged into it): '
+            f'status changed from {old_status} to {original_complaint.status}',
+            'status_update'
+        )
+        subject = f'Update on Complaint {original_complaint.complaint_id} (includes your report)'
+        body = f'''
+Dear {dup.author.username},
 
+Your complaint {dup.complaint_id} was earlier merged into {original_complaint.complaint_id}
+because it matched the same issue reported by others. That complaint just received an update:
+
+Title: {original_complaint.title}
+Previous Status: {old_status}
+New Status: {original_complaint.status}
+
+Thank you,
+Grievance Hub
+'''
+        send_email_notification(dup.author.email, subject, body)
+        notified += 1
+    return notified
 def generate_otp():
     """Generate a 6-digit OTP"""
     return ''.join(random.choices(string.digits, k=6))
+
+
+def generate_random_password():
+    """Generate a random secure password for CSV-imported accounts.
+    Users are expected to set their own password via 'Forgot Password'.
+    """
+    return secrets.token_urlsafe(12)
 
 
 def send_otp_email(email, otp, mail=None):
@@ -279,4 +320,54 @@ Grievance Hub
             f"❌ Error sending welcome email to "
             f"{student.username}: {e}"
         )
+        return False
+
+
+def send_csv_imported_staff_email(staff):
+    """
+    Send welcome email to a staff/mentor account imported through CSV.
+    Returns True if email was sent successfully.
+    """
+
+    if not staff.email:
+        print(f"❌ No email address for staff: {staff.username}")
+        return False
+
+    subject = 'Welcome to Grievance Hub - Staff Account'
+
+    body = f'''
+Dear {staff.username},
+
+Welcome to the Grievance Hub!
+
+Your staff account has been successfully created.
+
+Account Details:
+----------------
+Username: {staff.username}
+Email: {staff.email}
+Department: {staff.department or 'Not specified'}
+
+You can now login to the Grievance Hub and:
+- View complaints assigned to you
+- Update complaint status
+- Add comments to complaints
+- Mentor students in your department
+
+If you have not set your password yet, please use the
+"Forgot Password" option on the login page to create your password.
+
+Thank you,
+Grievance Hub
+'''
+
+    try:
+        success = send_email_notification(staff.email, subject, body)
+        if success:
+            print(f"✅ Welcome email sent to {staff.username} ({staff.email})")
+            return True
+        print(f"❌ Failed to send welcome email to {staff.username} ({staff.email})")
+        return False
+    except Exception as e:
+        print(f"❌ Error sending welcome email to {staff.username}: {e}")
         return False
