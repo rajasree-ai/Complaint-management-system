@@ -1520,8 +1520,6 @@ def view_complaints():
     status_filter = request.args.get('status', '')
     assigned_to_filter = request.args.get('assigned_to', '')
     department_filter = request.args.get('department', '')
-    if department_filter and is_super_admin(current_user):
-        query = query.join(User, Complaint.user_id == User.id).filter(User.department == department_filter)
     # ROLE BASED ACCESS
     if is_super_admin(current_user):
         query = Complaint.query.join(User, Complaint.user_id == User.id)
@@ -1605,8 +1603,6 @@ def export_complaints_pdf():
     category_filter = request.args.get('category', '')
     status_filter = request.args.get('status', '')
     department_filter = request.args.get('department', '')
-    if department_filter and is_super_admin(current_user):
-        query = query.join(User, Complaint.user_id == User.id).filter(User.department == department_filter)
     # Same role-based access logic as view_complaints
     if is_super_admin(current_user):
         query = Complaint.query
