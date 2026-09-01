@@ -46,7 +46,8 @@
         .nav-link {
             font-weight: 500;
             color: #4a5568 !important;
-            margin: 0 6px;
+            margin: 0 2px;
+            padding: 0.5rem 0.4rem;
             position: relative;
             transition: color 0.3s ease;
             white-space: nowrap;
@@ -64,9 +65,12 @@
         .logout-btn {
             background-color: #dc3545;
             color: white !important;
-            border-radius: 25px;
-            padding: 5px 20px !important;
-            margin-left: 15px;
+            border-radius: 20px;
+            padding: 4px 14px !important;
+            font-size: 0.85rem;
+            margin-left: 4px;
+            margin-right: 8px;
+            flex-shrink: 0;
             transition: all 0.3s ease;
         }
         
@@ -273,7 +277,7 @@
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-light">
-        <div class="container-fluid px-4">
+        <div class="container-fluid px-2">
             <a class="navbar-brand" href="{{ url_for('index') }}">
                 <i class="fas fa-comment-dots me-2"></i>
                 Grievance Hub
