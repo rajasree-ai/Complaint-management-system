@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center">
+            <h2><i class="fas fa-file-import me-2"></i>Bulk Upload HODs</h2>
+            <a href="{{ url_for('manage_departments') }}" class="btn btn-secondary">
+                <i class="fas fa-arrow-left me-2"></i>Back to Departments
+            </a>
+        </div>
+        <p class="text-muted">Upload a CSV file to assign HOD accounts to departments at once</p>
+    </div>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-md-7">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0"><i class="fas fa-upload me-2"></i>Upload CSV File</h4>
+            </div>
+            <div class="card-body">
+                <form method="POST" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label class="form-label">CSV File</label>
+                        <input type="file" name="csv_file" accept=".csv" class="form-control" required>
+                        <small class="text-muted">Must include columns: username, email, department</small>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="fas fa-file-import me-2"></i>Import HODs
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card mt-3 bg-light">
+            <div class="card-body">
+                <h6 class="card-title"><i class="fas fa-info-circle me-2"></i>How it works</h6>
+                <ul class="small mb-0">
+                    <li>Required columns: <code>username</code>, <code>email</code>, <code>department</code> (must match an existing department name exactly)</li>
+                    <li>Optional column: <code>phone</code></li>
+                    <li>If the email already belongs to an existing HOD, that department is added to their account instead of creating a duplicate — use this to give one person access to multiple departments</li>
+                    <li>New HODs are created with the default password and can reset it via "Forgot Password"</li>
+                </ul>
+                {% if departments %}
+                <hr>
+                <p class="small mb-1"><strong>Available departments:</strong></p>
+                <p class="small text-muted mb-0">{{ departments | map(attribute='name') | join(', ') }}</p>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if result %}
+        <div class="card mt-3">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-clipboard-list me-2"></i>Import Results</h5>
+            </div>
+            <div class="card-body">
+                {% if result.created %}
+                <h6 class="text-success"><i class="fas fa-check-circle me-1"></i>Created ({{ result.created|length }})</h6>
+                <ul class="small">
+                    {% for line in result.created %}<li>{{ line }}</li>{% endfor %}
+                </ul>
+                {% endif %}
+
+                {% if result.linked %}
+                <h6 class="text-primary"><i class="fas fa-link me-1"></i>Department Added to Existing HOD ({{ result.linked|length }})</h6>
+                <ul class="small">
+                    {% for line in result.linked %}<li>{{ line }}</li>{% endfor %}
+                </ul>
+                {% endif %}
+
+                {% if result.skipped %}
+                <h6 class="text-warning"><i class="fas fa-exclamation-triangle me-1"></i>Skipped ({{ result.skipped|length }})</h6>
+                <ul class="small">
+                    {% for line in result.skipped %}<li>{{ line }}</li>{% endfor %}
+                </ul>
+                {% endif %}
+
+                {% if result.errors %}
+                <h6 class="text-danger"><i class="fas fa-times-circle me-1"></i>Errors ({{ result.errors|length }})</h6>
+                <ul class="small">
+                    {% for line in result.errors %}<li>{{ line }}</li>{% endfor %}
+                </ul>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

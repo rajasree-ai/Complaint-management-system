@@ -24,7 +24,8 @@
                                 <th>Joined</th>
                                 <th>Complaints</th>
                                 <th>Actions</th>
-                            </thead>
+                            </tr>
+                        </thead>
                         <tbody>
                             {% for user in users %}
                               <tr>
@@ -43,6 +44,10 @@
                                     {% if user.role == 'admin' %}
                                         <span class="badge bg-danger">
                                             <i class="fas fa-crown me-1"></i>Admin
+                                        </span>
+                                    {% elif user.role == 'hod' %}
+                                        <span class="badge bg-warning text-dark">
+                                            <i class="fas fa-user-tie me-1"></i>HOD
                                         </span>
                                     {% elif user.role == 'staff' %}
                                         <span class="badge bg-success">
@@ -75,18 +80,33 @@
                                                 <ul class="dropdown-menu">
                                                     <li>
                                                         <a class="dropdown-item {% if user.role == 'student' %}active{% endif %}" 
-                                                           href="{{ url_for('change_user_role', user_id=user.id, role='student') }}">
+                                                           href="{{ url_for('super_admin_change_user_role', user_id=user.id, role='student') }}">
                                                             <i class="fas fa-user-graduate me-2"></i>Student
                                                         </a>
                                                     </li>
                                                     <li>
                                                         <a class="dropdown-item {% if user.role == 'staff' %}active{% endif %}" 
-                                                           href="{{ url_for('change_user_role', user_id=user.id, role='staff') }}">
+                                                           href="{{ url_for('super_admin_change_user_role', user_id=user.id, role='staff') }}">
                                                             <i class="fas fa-chalkboard-teacher me-2"></i>Staff
+                                                        </a>
+                                                    </li>
+                                                    <li>
+                                                        <a class="dropdown-item {% if user.role == 'hod' %}active{% endif %}"
+                                                           href="{{ url_for('super_admin_change_user_role', user_id=user.id, role='hod') }}"
+                                                           onclick="return confirm('Make {{ user.username }} the Head of Department for {{ user.department }}? Any existing HOD there will be demoted to Staff.');">
+                                                            <i class="fas fa-user-tie me-2"></i>Head of Department (HOD)
                                                         </a>
                                                     </li>
                                                 </ul>
                                             </div>
+
+                                            {% if user.role == 'hod' %}
+                                                <a href="{{ url_for('manage_hod_departments', user_id=user.id) }}"
+                                                   class="btn btn-sm btn-outline-primary ms-1"
+                                                   title="Manage which departments this HOD can access">
+                                                    <i class="fas fa-building"></i> Departments
+                                                </a>
+                                            {% endif %}
                                             
                                             <!-- Delete User Button (only if user has no complaints) -->
                                             {% if user.complaints|length == 0 %}
@@ -141,7 +161,7 @@
                                                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
                                                         <i class="fas fa-times me-2"></i>Cancel
                                                     </button>
-                                                    <form method="POST" action="{{ url_for('delete_user', user_id=user.id) }}">
+                                                    <form method="POST" action="{{ url_for('super_admin_delete_user', user_id=user.id) }}">
                                                         <button type="submit" class="btn btn-danger">
                                                             <i class="fas fa-trash-alt me-2"></i>
                                                             Yes, Delete User

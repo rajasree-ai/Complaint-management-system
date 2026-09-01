@@ -114,11 +114,27 @@ class DepartmentForm(FlaskForm):
     name = StringField('Department Name', validators=[DataRequired()])
     hod_id = SelectField('Department Head (HOD)', choices=[], coerce=int)
     submit = SubmitField('Add Department')
-    
-    def __init__(self, *args, **kwargs):
+
+    def __init__(self, current_hod_id=None, *args, **kwargs):
         super(DepartmentForm, self).__init__(*args, **kwargs)
-        users = User.query.all()
-        self.hod_id.choices = [(0, 'Select HOD')] + [(u.id, f"{u.username} ({u.email})") for u in users]
+
+        # IDs of users who are already the HOD of some department.
+        # When editing a department, its own current HOD (current_hod_id) is
+        # excluded from this "taken" set so they still appear in the dropdown.
+        taken_hod_ids = {
+            d.hod_id for d in Department.query.filter(Department.hod_id.isnot(None)).all()
+            if d.hod_id != current_hod_id
+        }
+
+        eligible_users = User.query.filter(
+            User.role.in_(['staff', 'hod'])
+        ).order_by(User.username).all()
+
+        self.hod_id.choices = [(0, 'Select HOD')] + [
+            (u.id, f"{u.username} ({u.email})")
+            for u in eligible_users
+            if u.id not in taken_hod_ids
+        ]
 
 
 class StudentStaffAssignmentForm(FlaskForm):

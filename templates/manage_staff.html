@@ -6,8 +6,8 @@
         <div class="d-flex justify-content-between align-items-center">
             <h2><i class="fas fa-chalkboard-teacher me-2"></i>Manage Staff - {{ department }}</h2>
             <div>
-                <a href="{{ url_for('bulk_import') }}" class="btn btn-outline-primary me-2">
-                    <i class="fas fa-file-import me-2"></i>Bulk Import
+                <a href="{{ url_for('upload_staff_csv') }}" class="btn btn-outline-primary me-2">
+                    <i class="fas fa-file-import me-2"></i>Bulk Upload Staff (CSV)
                 </a>
                 <a href="{{ url_for('add_department_staff') }}" class="btn btn-primary">
                     <i class="fas fa-user-plus me-2"></i>Add New Staff
@@ -22,10 +22,25 @@
     <div class="col-12">
         <div class="card">
             <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="selectAllStaff" onclick="toggleSelectAllStaff(this)">
+                        <label class="form-check-label" for="selectAllStaff">Select All</label>
+                    </div>
+                    <div>
+                        <button type="button" class="btn btn-outline-success btn-sm" onclick="exportStaff('csv')" title="Export selected staff as CSV (exports all if none selected)">
+                            <i class="fas fa-file-csv me-1"></i> Export CSV
+                        </button>
+                        <button type="button" class="btn btn-outline-danger btn-sm" onclick="exportStaff('pdf')" title="Export selected staff as PDF (exports all if none selected)">
+                            <i class="fas fa-file-pdf me-1"></i> Export PDF
+                        </button>
+                    </div>
+                </div>
                 <div class="table-responsive">
                     <table class="table table-hover">
                         <thead>
                             <tr>
+                                <th style="width: 40px;"></th>
                                 <th>ID</th>
                                 <th>Staff Name</th>
                                 <th>Email</th>
@@ -37,6 +52,9 @@
                         <tbody>
                             {% for staff in staff_stats %}
                             <tr>
+                                <td>
+                                    <input type="checkbox" class="staff-checkbox" value="{{ staff.user.id }}">
+                                </td>
                                 <td>{{ staff.user.id }}</td>
                                 <td>
                                     <i class="fas fa-user-tie me-2 text-success"></i>
@@ -68,7 +86,7 @@
                             </tr>
                             {% else %}
                             <tr>
-                                <td colspan="7" class="text-center text-muted">No staff members in this department</td>
+                                <td colspan="8" class="text-center text-muted">No staff members in this department</td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -92,6 +110,23 @@ function deleteStaff(userId, username) {
             }
         });
     }
+}
+
+function toggleSelectAllStaff(source) {
+    document.querySelectorAll('.staff-checkbox').forEach(cb => cb.checked = source.checked);
+}
+
+function exportStaff(format) {
+    const ids = Array.from(document.querySelectorAll('.staff-checkbox:checked')).map(cb => cb.value);
+    const params = new URLSearchParams();
+    ids.forEach(id => params.append('ids', id));
+
+    const base = format === 'pdf'
+        ? "{{ url_for('export_department_staff_pdf') }}"
+        : "{{ url_for('export_department_staff_csv') }}";
+
+    const query = params.toString();
+    window.location.href = query ? `${base}?${query}` : base;
 }
 </script>
 {% endblock %}

@@ -1,6 +1,18 @@
 {% extends "base.html" %}
 
 {% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center">
+            <h2><i class="fas fa-user-tie me-2"></i>Add HOD</h2>
+            <a href="{{ url_for('manage_departments') }}" class="btn btn-secondary">
+                <i class="fas fa-arrow-left me-2"></i>Back to Departments
+            </a>
+        </div>
+        <p class="text-muted">Create a single Head of Department (HOD) account</p>
+    </div>
+</div>
+
 <div class="row justify-content-center">
     <div class="col-md-6">
         <div class="card">
@@ -26,9 +38,12 @@
                         <select name="department" class="form-select" required>
                             <option value="">Select Department</option>
                             {% for dept in departments %}
-                            <option value="{{ dept.name }}">{{ dept.name }}</option>
+                            <option value="{{ dept.name }}">
+                                {{ dept.name }}{% if dept.hod %} — currently: {{ dept.hod.username }}{% endif %}
+                            </option>
                             {% endfor %}
                         </select>
+                        <small class="text-muted">If the selected department already has an HOD, they will be demoted to Staff.</small>
                     </div>
                     <button type="submit" class="btn btn-primary w-100">
                         <i class="fas fa-user-plus me-2"></i>Create HOD

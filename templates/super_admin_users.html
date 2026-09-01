@@ -87,7 +87,18 @@
                     {% endif %}
                 </td>
                 <td>{{ user.email }}</td>
-                <td>{{ user.department or 'N/A' }}</td>
+                <td>
+                    {% if user.display_department is defined %}
+                        {{ user.display_department or 'N/A' }}
+                        {% if user.is_additional_department %}
+                            <br><span class="badge bg-info text-dark mt-1" title="Home department: {{ user.department or 'N/A' }}">
+                                <i class="fas fa-link me-1"></i>Additional (home: {{ user.department or 'N/A' }})
+                            </span>
+                        {% endif %}
+                    {% else %}
+                        {{ user.department or 'N/A' }}
+                    {% endif %}
+                </td>
                 <td>
                     {% if user.role == 'admin' %}
                         <span class="badge bg-danger"><i class="fas fa-crown me-1"></i>Super Admin</span>
@@ -120,6 +131,11 @@
                                 <li><a class="dropdown-item" href="{{ url_for('super_admin_change_user_role', user_id=user.id, role='staff') }}">Staff</a></li>
                                 <li><a class="dropdown-item" href="{{ url_for('super_admin_change_user_role', user_id=user.id, role='hod') }}">HOD</a></li>
                             </ul>
+                            {% if user.role == 'hod' %}
+                            <a href="{{ url_for('manage_hod_departments', user_id=user.id) }}" class="btn btn-sm btn-outline-primary ms-1" title="Manage which departments this HOD can access">
+                                <i class="fas fa-building"></i>
+                            </a>
+                            {% endif %}
                             <form method="POST" action="{{ url_for('super_admin_delete_user', user_id=user.id) }}"
                                   style="display: inline;"
                                   onsubmit="return confirm('Delete this user?')">

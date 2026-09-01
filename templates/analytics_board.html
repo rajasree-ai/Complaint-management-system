@@ -1,6 +1,27 @@
 {% extends "base.html" %}
 
 {% block content %}
+<style>
+    .health-card { border-radius: 1rem; transition: transform 0.15s ease; }
+    .health-card:hover { transform: translateY(-3px); }
+    .health-card .health-icon { font-size: 1.5rem; opacity: 0.85; }
+    .health-card h3 { font-size: 1.6rem; margin-bottom: 0; }
+    .trend-pill { font-size: 0.75rem; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+    .trend-up { background: rgba(220, 53, 69, 0.15); color: #dc3545; }
+    .trend-down { background: rgba(40, 167, 69, 0.15); color: #28a745; }
+    .trend-flat { background: rgba(108, 117, 125, 0.15); color: #6c757d; }
+    .clickable-chart canvas { cursor: pointer; }
+    .leaderboard-row:hover { background: rgba(102, 126, 234, 0.06); }
+    .rank-badge { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.8rem; }
+    .rank-1 { background: #ffd700; color: #4a3800; }
+    .rank-2 { background: #c0c0c0; color: #3a3a3a; }
+    .rank-3 { background: #cd7f32; color: #fff; }
+    .rank-other { background: #e9ecef; color: #495057; }
+    .urgent-item { border-left: 4px solid #dc3545; background: #fff5f5; border-radius: 6px; padding: 10px 14px; margin-bottom: 8px; transition: background 0.15s ease; }
+    .urgent-item:hover { background: #ffe8e8; }
+    .urgent-item.overdue { border-left-color: #721c24; }
+</style>
+
 <div class="row mb-4">
     <div class="col-12">
         <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -8,7 +29,7 @@
                 <h2><i class="fas fa-chart-bar me-2"></i>Analytics Board</h2>
                 <p class="text-muted mb-0" id="scopeLabel">Loading...</p>
             </div>
-            <div class="d-flex gap-2">
+            <div class="d-flex gap-2 flex-wrap">
                 {% if is_super_admin_view %}
                 <select id="departmentSelect" class="form-select form-select-sm" style="width: auto;">
                     <option value="">All Departments</option>
@@ -38,34 +59,90 @@
                     <option value="30" selected>Last 30 days</option>
                     <option value="90">Last 90 days</option>
                 </select>
+                <a href="{{ url_for('view_complaints') }}" id="viewComplaintsLink" class="btn btn-sm btn-outline-primary">
+                    <i class="fas fa-list me-1"></i>View Complaints
+                </a>
             </div>
         </div>
     </div>
 </div>
 
-<!-- KPI Cards -->
+<!-- Row 1: Core KPI Cards -->
+<div class="row mb-3">
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-primary h-100 health-card">
+            <div class="card-body text-center">
+                <h6 class="card-title mb-1">Total Complaints</h6>
+                <h3 id="kpiTotal">-</h3>
+                <span id="kpiTrend" class="trend-pill trend-flat">-</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-success h-100 health-card">
+            <div class="card-body text-center">
+                <h6 class="card-title mb-1">Resolved</h6>
+                <h3 id="kpiResolved">-</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-info h-100 health-card">
+            <div class="card-body text-center">
+                <h6 class="card-title mb-1">Resolution Rate</h6>
+                <h3 id="kpiRate">-</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-dark h-100 health-card">
+            <div class="card-body text-center">
+                <h6 class="card-title mb-1">Avg Resolution Time</h6>
+                <h3 id="kpiAvgTime">-</h3>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Row 2: Operational Health -->
 <div class="row mb-4">
-    <div class="col-md-4 mb-3">
-        <div class="card text-white bg-primary h-100">
-            <div class="card-body text-center">
-                <h6 class="card-title">Total Complaints</h6>
-                <h2 class="mb-0" id="kpiTotal">-</h2>
+    <div class="col-md-3 mb-3">
+        <div class="card h-100 health-card border-start border-4 border-danger">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div><small class="text-muted">Overdue</small><h3 class="text-danger" id="kpiOverdue">-</h3></div>
+                    <i class="fas fa-exclamation-triangle health-icon text-danger"></i>
+                </div>
             </div>
         </div>
     </div>
-    <div class="col-md-4 mb-3">
-        <div class="card text-white bg-success h-100">
-            <div class="card-body text-center">
-                <h6 class="card-title">Resolved</h6>
-                <h2 class="mb-0" id="kpiResolved">-</h2>
+    <div class="col-md-3 mb-3">
+        <div class="card h-100 health-card border-start border-4 border-warning">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div><small class="text-muted">Escalated</small><h3 class="text-warning" id="kpiEscalated">-</h3></div>
+                    <i class="fas fa-level-up-alt health-icon text-warning"></i>
+                </div>
             </div>
         </div>
     </div>
-    <div class="col-md-4 mb-3">
-        <div class="card text-white bg-info h-100">
-            <div class="card-body text-center">
-                <h6 class="card-title">Resolution Rate</h6>
-                <h2 class="mb-0" id="kpiRate">-</h2>
+    <div class="col-md-3 mb-3">
+        <div class="card h-100 health-card border-start border-4 border-secondary">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div><small class="text-muted">Merged Duplicates</small><h3 class="text-secondary" id="kpiDuplicates">-</h3></div>
+                    <i class="fas fa-code-merge health-icon text-secondary"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card h-100 health-card border-start border-4 border-success">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div><small class="text-muted">SLA Compliance</small><h3 class="text-success" id="kpiSla">-</h3></div>
+                    <i class="fas fa-shield-alt health-icon text-success"></i>
+                </div>
             </div>
         </div>
     </div>
@@ -76,32 +153,33 @@
         <div class="card">
             <div class="card-header"><h5 class="mb-0"><i class="fas fa-lightbulb me-2"></i>Insights</h5></div>
             <div class="card-body">
-                <ul class="mb-0" id="insightsList">
-                    <li class="text-muted">Loading insights...</li>
-                </ul>
+                <ul class="mb-0" id="insightsList"><li class="text-muted">Loading insights...</li></ul>
             </div>
         </div>
     </div>
 </div>
 
+<!-- Row 3: Category (Student-Selected) | Category (AI-Predicted) -->
 <div class="row">
     <div class="col-md-6 mb-4">
-        <div class="card h-100">
-            <div class="card-header"><h5 class="mb-0"><i class="fas fa-tags me-2"></i>Complaints by Category (Student-Selected)</h5></div>
+        <div class="card h-100 clickable-chart">
+            <div class="card-header"><h5 class="mb-0"><i class="fas fa-tags me-2"></i>Complaints by Category (Student-Selected) <small class="text-white-50">click a bar to view</small></h5></div>
             <div class="card-body"><canvas id="categoryChart" height="240"></canvas></div>
         </div>
     </div>
     <div class="col-md-6 mb-4">
-        <div class="card h-100">
-            <div class="card-header"><h5 class="mb-0"><i class="fas fa-robot me-2"></i>Complaints by Category (AI-Predicted)</h5></div>
+        <div class="card h-100 clickable-chart">
+            <div class="card-header"><h5 class="mb-0"><i class="fas fa-robot me-2"></i>Complaints by Category (AI-Predicted) <small class="text-white-50">click a bar to view</small></h5></div>
             <div class="card-body"><canvas id="aiCategoryChart" height="240"></canvas></div>
         </div>
     </div>
 </div>
+
+<!-- Row 4: Trends | Category Resolution Rate -->
 <div class="row">
     <div class="col-md-6 mb-4">
         <div class="card h-100">
-            <div class="card-header"><h5 class="mb-0"><i class="fas fa-chart-line me-2"></i>Monthly Trend (Last 6 Months)</h5></div>
+            <div class="card-header"><h5 class="mb-0"><i class="fas fa-chart-line me-2"></i>Complaint Trends (Last 6 Months)</h5></div>
             <div class="card-body"><canvas id="trendChart" height="240"></canvas></div>
         </div>
     </div>
@@ -113,20 +191,42 @@
     </div>
 </div>
 
+<!-- Row 5: Mentor/Staff Performance -->
 <div class="row">
-    <div class="col-md-6 mb-4">
+    <div class="col-12 mb-4">
         <div class="card h-100">
-            <div class="card-header"><h5 class="mb-0"><i class="fas fa-layer-group me-2"></i>Status Breakdown</h5></div>
-            <div class="card-body"><canvas id="statusChart" height="240"></canvas></div>
+            <div class="card-header"><h5 class="mb-0"><i class="fas fa-trophy me-2"></i>Mentor / Staff Performance</h5></div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th style="width: 50px;">#</th>
+                                <th>Name</th>
+                                {% if is_super_admin_view %}<th>Dept</th>{% endif %}
+                                <th>Assigned</th>
+                                <th>Resolved</th>
+                                <th>Rate</th>
+                            </tr>
+                        </thead>
+                        <tbody id="staffLeaderboardBody">
+                            <tr><td colspan="6" class="text-center text-muted py-3">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
 </div>
 
+<!-- Row 6: Urgent Attention -->
 <div class="row">
-    <div class="col-md-12 mb-4">
-        <div class="card h-100">
-            <div class="card-header"><h5 class="mb-0"><i class="fas fa-exclamation-circle me-2"></i>Priority Breakdown</h5></div>
-            <div class="card-body"><canvas id="priorityChart" height="150"></canvas></div>
+    <div class="col-12 mb-4">
+        <div class="card border-danger">
+            <div class="card-header bg-danger text-white"><h5 class="mb-0"><i class="fas fa-exclamation-circle me-2"></i>Urgent Attention Required (High Priority, Unresolved)</h5></div>
+            <div class="card-body" id="urgentList">
+                <p class="text-muted text-center mb-0 py-3">Loading...</p>
+            </div>
         </div>
     </div>
 </div>
@@ -149,6 +249,11 @@
 document.addEventListener('DOMContentLoaded', function () {
     var charts = {};
     var isSuperAdmin = {{ is_super_admin_view|tojson }};
+    var complaintDetailsUrlTemplate = "{{ url_for('complaint_details', complaint_id=0) }}";
+
+    function complaintDetailsUrl(id) {
+        return complaintDetailsUrlTemplate.slice(0, -1) + id;
+    }
 
     function destroyChart(id) {
         if (charts[id]) { charts[id].destroy(); }
@@ -169,13 +274,57 @@ document.addEventListener('DOMContentLoaded', function () {
         return params.toString();
     }
 
-        function renderInsights(insights) {
+    function buildDrilldownUrl(extraParams) {
+        var params = new URLSearchParams();
+        if (isSuperAdmin) {
+            var dept = document.getElementById('departmentSelect').value;
+            if (dept) params.set('department', dept);
+        }
+        Object.keys(extraParams).forEach(function (key) { params.set(key, extraParams[key]); });
+        return '{{ url_for("view_complaints") }}?' + params.toString();
+    }
+
+    function renderInsights(insights) {
         var list = document.getElementById('insightsList');
         list.innerHTML = '';
         insights.forEach(function (text) {
             var li = document.createElement('li');
             li.innerHTML = text;
             list.appendChild(li);
+        });
+    }
+
+    function renderTrendPill(pct) {
+        var el = document.getElementById('kpiTrend');
+        var rounded = Math.round(pct * 10) / 10;
+        if (rounded > 0) { el.textContent = '\u25B2 ' + rounded + '% vs previous'; el.className = 'trend-pill trend-up'; }
+        else if (rounded < 0) { el.textContent = '\u25BC ' + Math.abs(rounded) + '% vs previous'; el.className = 'trend-pill trend-down'; }
+        else { el.textContent = 'No change vs previous'; el.className = 'trend-pill trend-flat'; }
+    }
+
+    function renderUrgentList(urgentComplaints) {
+        var container = document.getElementById('urgentList');
+        container.innerHTML = '';
+        if (!urgentComplaints.length) {
+            container.innerHTML = '<p class="text-muted text-center mb-0 py-3"><i class="fas fa-check-circle text-success me-2"></i>No urgent unresolved complaints right now.</p>';
+            return;
+        }
+        urgentComplaints.forEach(function (c) {
+            var div = document.createElement('div');
+            div.className = 'urgent-item' + (c.is_overdue ? ' overdue' : '');
+            div.style.cursor = 'pointer';
+            div.innerHTML =
+                '<div class="d-flex justify-content-between align-items-center">' +
+                    '<div>' +
+                        '<span class="badge bg-secondary me-2">' + c.complaint_id + '</span>' +
+                        '<strong>' + c.title + '</strong>' +
+                        (isSuperAdmin ? ' <span class="text-muted">(' + c.department + ')</span>' : '') +
+                        (c.is_overdue ? ' <span class="badge bg-dark ms-1">Overdue</span>' : '') +
+                    '</div>' +
+                    '<small class="text-muted">' + c.status.replace('_',' ') + ' since ' + c.created_at + '</small>' +
+                '</div>';
+            div.addEventListener('click', function () { window.location.href = complaintDetailsUrl(c.id); });
+            container.appendChild(div);
         });
     }
 
@@ -187,72 +336,61 @@ document.addEventListener('DOMContentLoaded', function () {
                 document.getElementById('kpiTotal').textContent = data.total;
                 document.getElementById('kpiResolved').textContent = data.resolved;
                 document.getElementById('kpiRate').textContent = data.resolution_rate + '%';
+                document.getElementById('kpiAvgTime').textContent = data.avg_resolution_hours < 24
+                    ? data.avg_resolution_hours + 'h' : Math.round(data.avg_resolution_hours / 24 * 10) / 10 + 'd';
+                document.getElementById('kpiOverdue').textContent = data.overdue_count;
+                document.getElementById('kpiEscalated').textContent = data.escalated_count;
+                document.getElementById('kpiDuplicates').textContent = data.duplicate_merged_count;
+                document.getElementById('kpiSla').textContent = (data.sla_compliance_rate === null) ? 'N/A' : data.sla_compliance_rate + '%';
 
+                renderTrendPill(data.trend_change_pct);
                 renderInsights(data.insights);
+                renderUrgentList(data.urgent_complaints);
 
                 var catLabels = Object.keys(data.by_category);
                 var catValues = Object.values(data.by_category);
+                var aiCatLabels = Object.keys(data.by_ai_category);
+                var aiCatValues = Object.values(data.by_ai_category);
+                var sharedMax = Math.max(1, Math.max.apply(null, catValues.concat(aiCatValues)));
+                var catLabelToValue = { 'Academic': 'academic', 'Administrative': 'administrative', 'Facility': 'facility', 'Harassment': 'harassment', 'Technical': 'technical', 'Other': 'other' };
+
                 destroyChart('category');
                 charts.category = new Chart(document.getElementById('categoryChart').getContext('2d'), {
                     type: 'bar',
                     data: { labels: catLabels, datasets: [{ label: 'Complaints', data: catValues, backgroundColor: catLabels.map(function (_, i) {
-                        var palette = ['#2b7cff', '#ff9f1c', '#28a745', '#dc3545', '#6f42c1', '#17a2b8'];
-                        return palette[i % palette.length];
-                    }), borderRadius: 4 }] },
-                    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+                        var palette = ['#2b7cff', '#ff9f1c', '#28a745', '#dc3545', '#6f42c1', '#17a2b8']; return palette[i % palette.length];
+                    }), borderRadius: 4, maxBarThickness: 50 }] },
+                    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, max: sharedMax, ticks: { stepSize: 1 } } },
+                        onClick: function (evt, elements) {
+                            if (!elements.length) return;
+                            var label = catLabels[elements[0].index];
+                            window.location.href = buildDrilldownUrl({ category: catLabelToValue[label] || label.toLowerCase() });
+                        }
+                    }
                 });
-                var aiCatLabels = Object.keys(data.by_ai_category);
-                var aiCatValues = Object.values(data.by_ai_category);
+
                 destroyChart('aiCategory');
                 charts.aiCategory = new Chart(document.getElementById('aiCategoryChart').getContext('2d'), {
                     type: 'bar',
                     data: { labels: aiCatLabels, datasets: [{ label: 'Complaints', data: aiCatValues, backgroundColor: aiCatLabels.map(function (_, i) {
-                        var palette = ['#e63946', '#2a9d8f', '#e9c46a', '#264653', '#f4a261', '#8ecae6', '#9b5de5', '#00bbf9', '#adb5bd'];
-                        return palette[i % palette.length];
-                    }), borderRadius: 4 }] },
-                    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+                        var palette = ['#e63946', '#2a9d8f', '#e9c46a', '#264653', '#f4a261', '#8ecae6', '#9b5de5', '#00bbf9', '#adb5bd']; return palette[i % palette.length];
+                    }), borderRadius: 4, maxBarThickness: 50 }] },
+                    options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, max: sharedMax, ticks: { stepSize: 1 } } },
+                        onClick: function (evt, elements) {
+                            if (!elements.length) return;
+                            var label = aiCatLabels[elements[0].index];
+                            if (label === 'Uncategorized') return;
+                            window.location.href = buildDrilldownUrl({ ai_category: label });
+                        }
+                    }
                 });
 
-                destroyChart('trend');
                 destroyChart('trend');
                 charts.trend = new Chart(document.getElementById('trendChart').getContext('2d'), {
                     type: 'line',
-                    data: {
-                        labels: data.monthly_trend_labels,
-                        datasets: [{
-                            label: 'Complaints',
-                            data: data.monthly_trend_values,
-                            borderColor: '#667eea',
-                            backgroundColor: 'rgba(102, 126, 234, 0.15)',
-                            fill: true,
-                            tension: 0.3,
-                            pointRadius: 4
-                        }]
-                    },
+                    data: { labels: data.monthly_trend_labels, datasets: [{ label: 'Complaints', data: data.monthly_trend_values,
+                        borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.15)', fill: true, tension: 0.3, pointRadius: 4 }] },
                     options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
-                });
-
-                var statusColors = { pending: '#ffc107', in_progress: '#17a2b8', resolved: '#28a745', rejected: '#dc3545' };
-                var statusLabels = Object.keys(data.by_status);
-                var statusValues = Object.values(data.by_status);
-                destroyChart('status');
-                charts.status = new Chart(document.getElementById('statusChart').getContext('2d'), {
-                    type: 'doughnut',
-                    data: {
-                        labels: statusLabels.map(function (s) { return s.replace('_', ' '); }),
-                        datasets: [{ data: statusValues, backgroundColor: statusLabels.map(function (s) { return statusColors[s] || '#6c757d'; }) }]
-                    },
-                    options: { responsive: true, cutout: '60%' }
-                });
-
-                var priorityColors = { high: '#dc3545', medium: '#ffc107', low: '#17a2b8' };
-                var prioLabels = Object.keys(data.by_priority);
-                var prioValues = Object.values(data.by_priority);
-                destroyChart('priority');
-                charts.priority = new Chart(document.getElementById('priorityChart').getContext('2d'), {
-                    type: 'bar',
-                    data: { labels: prioLabels, datasets: [{ label: 'Complaints', data: prioValues, backgroundColor: prioLabels.map(function (p) { return priorityColors[p] || '#6c757d'; }) }] },
-                    options: { responsive: true, indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true, ticks: { stepSize: 1 } } } }
                 });
 
                 var resLabels = Object.keys(data.category_resolution_rate);
@@ -262,6 +400,35 @@ document.addEventListener('DOMContentLoaded', function () {
                     type: 'bar',
                     data: { labels: resLabels, datasets: [{ label: 'Resolution %', data: resValues, backgroundColor: '#28a745', borderRadius: 4 }] },
                     options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, max: 100 } } }
+                });
+
+                document.getElementById('viewComplaintsLink').href = buildDrilldownUrl({});
+            });
+    }
+
+    function loadStaffLeaderboard() {
+        var params = new URLSearchParams();
+        if (isSuperAdmin) {
+            var dept = document.getElementById('departmentSelect').value;
+            if (dept) params.set('department', dept);
+        }
+        fetch('/api/analytics/staff-performance?' + params.toString())
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                var tbody = document.getElementById('staffLeaderboardBody');
+                tbody.innerHTML = '';
+                if (!data.length) {
+                    tbody.innerHTML = '<tr><td colspan="' + (isSuperAdmin ? 6 : 5) + '" class="text-center text-muted py-3">No staff with assigned complaints yet.</td></tr>';
+                    return;
+                }
+                data.forEach(function (row, i) {
+                    var rankClass = i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : 'rank-other';
+                    var tr = document.createElement('tr');
+                    tr.className = 'leaderboard-row';
+                    var deptCell = isSuperAdmin ? '<td>' + row.department + '</td>' : '';
+                    tr.innerHTML = '<td><span class="rank-badge ' + rankClass + '">' + (i + 1) + '</span></td><td>' + row.name + '</td>' + deptCell +
+                        '<td>' + row.assigned + '</td><td>' + row.resolved + '</td><td>' + row.resolution_rate + '%</td>';
+                    tbody.appendChild(tr);
                 });
             });
     }
@@ -281,33 +448,31 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 destroyChart('department');
                 charts.department = new Chart(document.getElementById('departmentChart').getContext('2d'), {
-                    data: {
-                        labels: labels,
-                        datasets: [
-                            { type: 'bar', label: 'Total Complaints', data: totals, backgroundColor: '#667eea', yAxisID: 'y' },
-                            { type: 'line', label: 'Resolution Rate %', data: rates, borderColor: '#28a745', backgroundColor: '#28a745', yAxisID: 'y1', tension: 0.3 }
-                        ]
-                    },
-                    options: {
-                        responsive: true,
-                        scales: {
-                            y: { beginAtZero: true, position: 'left', title: { display: true, text: 'Complaints' } },
-                            y1: { beginAtZero: true, max: 100, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Resolution %' } }
-                        }
-                    }
+                    data: { labels: labels, datasets: [
+                        { type: 'bar', label: 'Total Complaints', data: totals, backgroundColor: '#667eea', yAxisID: 'y' },
+                        { type: 'line', label: 'Resolution Rate %', data: rates, borderColor: '#28a745', backgroundColor: '#28a745', yAxisID: 'y1', tension: 0.3 }
+                    ] },
+                    options: { responsive: true, scales: {
+                        y: { beginAtZero: true, position: 'left', title: { display: true, text: 'Complaints' } },
+                        y1: { beginAtZero: true, max: 100, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Resolution %' } }
+                    }, onClick: function (evt, elements) {
+                        if (!elements.length) return;
+                        document.getElementById('departmentSelect').value = labels[elements[0].index];
+                        loadMainAnalytics();
+                        loadStaffLeaderboard();
+                    } }
                 });
             });
     }
 
     function refreshAll() {
         loadMainAnalytics();
+        loadStaffLeaderboard();
         loadDepartmentComparison();
     }
 
     document.getElementById('daysSelect').addEventListener('change', refreshAll);
-    if (isSuperAdmin) {
-        document.getElementById('departmentSelect').addEventListener('change', loadMainAnalytics);
-    }
+    if (isSuperAdmin) { document.getElementById('departmentSelect').addEventListener('change', refreshAll); }
     document.getElementById('yearSelect').addEventListener('change', loadMainAnalytics);
     document.getElementById('sectionSelect').addEventListener('change', loadMainAnalytics);
 

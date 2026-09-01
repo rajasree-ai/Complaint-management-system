@@ -48,11 +48,11 @@ logger = logging.getLogger('automation')
 # Configuration (override via environment variables if you want different SLAs)
 # ---------------------------------------------------------------------------
 DEADLINE_HOURS = {
-    'high': int(os.environ.get('SLA_HIGH_HOURS', 24)),
-    'medium': int(os.environ.get('SLA_MEDIUM_HOURS', 72)),
-    'low': int(os.environ.get('SLA_LOW_HOURS', 120)),
+    'high': int(os.environ.get('SLA_HIGH_HOURS', 72)),
+    'medium': int(os.environ.get('SLA_MEDIUM_HOURS', 120)),
+    'low': int(os.environ.get('SLA_LOW_HOURS', 168)),
 }
-ESCALATION_INTERVAL_DAYS = int(os.environ.get('ESCALATION_INTERVAL_DAYS', 2))
+HOD_ESCALATION_BUFFER_HOURS = int(os.environ.get('HOD_ESCALATION_BUFFER_HOURS', 72))
 REMINDER_WINDOW_HOURS = int(os.environ.get('REMINDER_WINDOW_HOURS', 24))
 DUPLICATE_SIMILARITY_THRESHOLD = float(os.environ.get('DUPLICATE_SIMILARITY_THRESHOLD', 0.75))
 DUPLICATE_LOOKBACK_DAYS = int(os.environ.get('DUPLICATE_LOOKBACK_DAYS', 14))
@@ -130,61 +130,73 @@ def _notify(user, complaint, message, ntype=AUTOMATION_NOTIFICATION_TYPE):
 # ---------------------------------------------------------------------------
 
 def escalate_complaints():
-    """Escalate complaints that have been open too long.
-    Level 0 -> 1: escalate to the department HOD.
-    Level 1 -> 2: escalate to the Principal / super admin.
+    """Escalate complaints based on their SLA 'Overdue' status (priority-based deadline),
+    not a flat time-since-filed timer — so high-priority complaints escalate faster.
+
+    Level 0 -> 1: the moment a complaint goes overdue, escalate to the department HOD.
+    Level 1 -> 2: if it's still open and still overdue HOD_ESCALATION_BUFFER_HOURS after
+    that HOD escalation, escalate further to the Principal / super admin.
     """
-    threshold = datetime.utcnow() - timedelta(days=ESCALATION_INTERVAL_DAYS)
-    stale = Complaint.query.filter(
+    # Make sure is_overdue flags are fresh before we act on them.
+    mark_overdue_complaints()
+
+    now = datetime.utcnow()
+    escalated_count = 0
+
+    # Level 0 -> 1: any overdue, still-open, not-yet-escalated complaint goes to HOD immediately.
+    newly_overdue = Complaint.query.filter(
         Complaint.status.in_(OPEN_STATUSES),
-        Complaint.created_at <= threshold,
+        Complaint.is_overdue.is_(True),
+        Complaint.escalation_level == 0,
     ).all()
 
-    escalated_count = 0
-    for complaint in stale:
-        last_action = complaint.last_escalated_at or complaint.created_at
-        if last_action > threshold:
-            continue  # not stale *since* the last escalation yet
-
+    for complaint in newly_overdue:
         author = complaint.author
-        if complaint.escalation_level == 0:
-            hod = _get_department_hod(author.department) if author else None
-            if hod:
-                message = (
-                    f"Complaint {complaint.complaint_id} ('{complaint.title}') has been open "
-                    f"for {ESCALATION_INTERVAL_DAYS}+ days without resolution and is escalated to you."
-                )
-                _notify(hod, complaint, message)
-                send_email_notification(
-                    hod.email,
-                    f'Escalation: Complaint {complaint.complaint_id} needs attention',
-                    message,
-                )
-                complaint.escalation_level = 1
-                complaint.last_escalated_at = datetime.utcnow()
-                escalated_count += 1
-        elif complaint.escalation_level == 1:
-            for admin in _get_super_admins():
-                message = (
-                    f"Complaint {complaint.complaint_id} ('{complaint.title}') remains unresolved "
-                    f"after HOD escalation and is now escalated to Principal/Admin level."
-                )
-                _notify(admin, complaint, message)
-                send_email_notification(
-                    admin.email,
-                    f'Escalation: Complaint {complaint.complaint_id} needs Principal attention',
-                    message,
-                )
-            complaint.escalation_level = 2
-            complaint.last_escalated_at = datetime.utcnow()
-            escalated_count += 1
-        # level 2 = already at the top; no further escalation
+        hod = _get_department_hod(author.department) if author else None
+        if hod:
+            message = (
+                f"Complaint {complaint.complaint_id} ('{complaint.title}') has passed its SLA deadline "
+                f"and is escalated to you as department HOD."
+            )
+            _notify(hod, complaint, message)
+            send_email_notification(
+                hod.email,
+                f'Escalation: Complaint {complaint.complaint_id} is overdue',
+                message,
+            )
+        complaint.escalation_level = 1
+        complaint.last_escalated_at = now
+        escalated_count += 1
+
+    # Level 1 -> 2: still open, still overdue, and HOD_ESCALATION_BUFFER_HOURS has passed
+    # since the HOD escalation without resolution -> escalate to Principal/Super Admin.
+    buffer_cutoff = now - timedelta(hours=HOD_ESCALATION_BUFFER_HOURS)
+    stale_at_hod = Complaint.query.filter(
+        Complaint.status.in_(OPEN_STATUSES),
+        Complaint.is_overdue.is_(True),
+        Complaint.escalation_level == 1,
+        Complaint.last_escalated_at <= buffer_cutoff,
+    ).all()
+
+    for complaint in stale_at_hod:
+        for admin in _get_super_admins():
+            message = (
+                f"Complaint {complaint.complaint_id} ('{complaint.title}') remains unresolved and overdue "
+                f"{HOD_ESCALATION_BUFFER_HOURS}h after HOD escalation. Escalated to Principal/Admin level."
+            )
+            _notify(admin, complaint, message)
+            send_email_notification(
+                admin.email,
+                f'Escalation: Complaint {complaint.complaint_id} needs Principal attention',
+                message,
+            )
+        complaint.escalation_level = 2
+        complaint.last_escalated_at = now
+        escalated_count += 1
 
     if escalated_count:
         db.session.commit()
     logger.info('[escalation] escalated %s complaint(s)', escalated_count)
-
-
 # ---------------------------------------------------------------------------
 # 2. ASSIGNMENT - every 24 hours
 # ---------------------------------------------------------------------------
@@ -568,7 +580,7 @@ def init_automation(app):
                     logger.exception('Automation job %s failed', job_func.__name__)
         return _runner
 
-    scheduler.add_job(_wrap(escalate_complaints), IntervalTrigger(days=ESCALATION_INTERVAL_DAYS), id='escalation')
+    scheduler.add_job(_wrap(escalate_complaints), IntervalTrigger(hours=12), id='escalation')
     scheduler.add_job(_wrap(assign_unassigned_complaints), IntervalTrigger(hours=24), id='assignment')
     scheduler.add_job(_wrap(detect_duplicate_complaints), IntervalTrigger(hours=12), id='duplicates')
     scheduler.add_job(_wrap(send_weekly_reports), CronTrigger(day_of_week='mon', hour=9, minute=0), id='weekly_reports')

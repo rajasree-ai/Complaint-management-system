@@ -6,18 +6,55 @@
         <div class="d-flex justify-content-between align-items-center">
             <h2><i class="fas fa-users me-2"></i>{{ department }} Department Users</h2>
           <div>
-                <a href="{{ url_for('export_hod_students_csv') }}" class="btn btn-outline-success me-2" title="Export students by year/section">
-                    <i class="fas fa-file-csv me-2"></i>Export Students (CSV)
-                </a>
-                <a href="{{ url_for('export_hod_students_pdf') }}" class="btn btn-outline-danger me-2" title="Export students by year/section">
-                    <i class="fas fa-file-pdf me-2"></i>Export Students (PDF)
-                </a>
+                <button type="button" class="btn btn-outline-secondary me-2" data-bs-toggle="modal" data-bs-target="#studentColumnsModal">
+                    <i class="fas fa-list-check me-2"></i>Choose Export Columns
+                </button>
                 <a href="{{ url_for('hod_dashboard') }}" class="btn btn-secondary">
                     <i class="fas fa-arrow-left me-2"></i>Back to Dashboard
                 </a>
             </div>
         </div>
         <p class="text-muted">Manage students, staff, and mentors in your department</p>
+    </div>
+</div>
+
+<!-- Column Picker Modal -->
+<div class="modal fade" id="studentColumnsModal" tabindex="-1" aria-labelledby="studentColumnsModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title" id="studentColumnsModalLabel"><i class="fas fa-list-check me-2"></i>Choose Export Columns</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small">Pick which details to include, then export.</p>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="studentColSelectAll" checked onclick="toggleAllStudentColumns(this)">
+                    <label class="form-check-label fw-bold" for="studentColSelectAll">Select All</label>
+                </div>
+                <hr>
+                {% set student_columns = [
+                    ('roll_number', 'Roll Number'), ('username', 'Name'), ('email', 'Email'),
+                    ('year', 'Year'), ('section', 'Section'), ('mentor', 'Mentor'),
+                    ('phone', 'Phone'), ('parent_name', 'Parent Name'),
+                    ('parent_phone', 'Parent Phone'), ('address', 'Address')
+                ] %}
+                {% for key, label in student_columns %}
+                <div class="form-check">
+                    <input class="form-check-input student-col-checkbox" type="checkbox" value="{{ key }}" id="studentCol_{{ key }}" checked>
+                    <label class="form-check-label" for="studentCol_{{ key }}">{{ label }}</label>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-success" onclick="exportStudentsWithColumns('csv')">
+                    <i class="fas fa-file-csv me-1"></i> Export CSV
+                </button>
+                <button type="button" class="btn btn-outline-danger" onclick="exportStudentsWithColumns('pdf')">
+                    <i class="fas fa-file-pdf me-1"></i> Export PDF
+                </button>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -99,6 +136,7 @@
                                         <ul class="dropdown-menu">
                                             <li><a class="dropdown-item" href="{{ url_for('department_change_user_role', user_id=student.id, role='student') }}">Student</a></li>
                                             <li><a class="dropdown-item" href="{{ url_for('department_change_user_role', user_id=student.id, role='staff') }}">Staff/Mentor</a></li>
+                                            <li><a class="dropdown-item" href="{{ url_for('department_change_user_role', user_id=student.id, role='hod') }}" onclick="return confirm('Make {{ student.username }} the Head of Department? Any existing HOD will be demoted to Staff.');">Head of Department (HOD)</a></li>
                                         </ul>
                                         <form method="POST" action="{{ url_for('department_delete_user', user_id=student.id) }}" 
                                               style="display: inline;" 
@@ -123,3 +161,24 @@
     </div>
     
     {% endblock %}
+
+{% block scripts %}
+<script>
+function toggleAllStudentColumns(source) {
+    document.querySelectorAll('.student-col-checkbox').forEach(cb => cb.checked = source.checked);
+}
+
+function exportStudentsWithColumns(format) {
+    const columns = Array.from(document.querySelectorAll('.student-col-checkbox:checked')).map(cb => cb.value);
+    const params = new URLSearchParams();
+    if (columns.length) {
+        params.set('columns', columns.join(','));
+    }
+    const base = format === 'pdf'
+        ? "{{ url_for('export_hod_students_pdf') }}"
+        : "{{ url_for('export_hod_students_csv') }}";
+    const query = params.toString();
+    window.location.href = query ? `${base}?${query}` : base;
+}
+</script>
+{% endblock %}

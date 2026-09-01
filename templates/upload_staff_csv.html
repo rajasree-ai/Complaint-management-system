@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center">
+            <h2><i class="fas fa-file-import me-2"></i>Bulk Upload Staff</h2>
+            <a href="{{ url_for('manage_staff') }}" class="btn btn-secondary">
+                <i class="fas fa-arrow-left me-2"></i>Back to Manage Staff
+            </a>
+        </div>
+        <p class="text-muted">Upload a CSV file to add multiple staff members to the {{ department }} department at once</p>
+    </div>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-md-7">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0"><i class="fas fa-upload me-2"></i>Upload CSV File</h4>
+            </div>
+            <div class="card-body">
+                <form method="POST" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label class="form-label">CSV File</label>
+                        <input type="file" name="csv_file" accept=".csv" class="form-control" required>
+                        <small class="text-muted">Must include columns: username, email</small>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="fas fa-file-import me-2"></i>Import Staff
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card mt-3 bg-light">
+            <div class="card-body">
+                <h6 class="card-title"><i class="fas fa-info-circle me-2"></i>How it works</h6>
+                <ul class="small mb-0">
+                    <li>Required columns: <code>username</code>, <code>email</code></li>
+                    <li>Optional column: <code>phone</code></li>
+                    <li>All staff are added to your department (<strong>{{ department }}</strong>) automatically</li>
+                    <li>Rows with duplicate emails or missing required data are skipped and reported below</li>
+                    <li>New staff are created with the default password and can reset it via "Forgot Password"</li>
+                </ul>
+            </div>
+        </div>
+
+        {% if result %}
+        <div class="card mt-3">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-clipboard-list me-2"></i>Import Results</h5>
+            </div>
+            <div class="card-body">
+                {% if result.created %}
+                <h6 class="text-success"><i class="fas fa-check-circle me-1"></i>Created ({{ result.created|length }})</h6>
+                <ul class="small">
+                    {% for line in result.created %}<li>{{ line }}</li>{% endfor %}
+                </ul>
+                {% endif %}
+
+                {% if result.skipped %}
+                <h6 class="text-warning"><i class="fas fa-exclamation-triangle me-1"></i>Skipped ({{ result.skipped|length }})</h6>
+                <ul class="small">
+                    {% for line in result.skipped %}<li>{{ line }}</li>{% endfor %}
+                </ul>
+                {% endif %}
+
+                {% if result.errors %}
+                <h6 class="text-danger"><i class="fas fa-times-circle me-1"></i>Errors ({{ result.errors|length }})</h6>
+                <ul class="small">
+                    {% for line in result.errors %}<li>{{ line }}</li>{% endfor %}
+                </ul>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -36,6 +36,26 @@ class Department(db.Model):
     hod = db.relationship('User', foreign_keys=[hod_id], backref='managed_department')
 
 
+class HODDepartment(db.Model):
+    """Join table allowing one HOD (User) to have access to multiple departments.
+    Department.hod_id remains the single 'official' HOD shown on Manage Departments,
+    but this table is the real source of truth for which departments a HOD can access."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False)
+    department_id = db.Column(db.Integer, db.ForeignKey('department.id', ondelete='CASCADE'), nullable=False)
+    assigned_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship(
+        'User',
+        foreign_keys=[user_id],
+        backref=db.backref('hod_department_links', passive_deletes=True, cascade='all, delete-orphan')
+    )
+    department_ref = db.relationship('Department', foreign_keys=[department_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'department_id', name='unique_hod_department'),
+    )
+
 
 class Complaint(db.Model):
     id = db.Column(db.Integer, primary_key=True)

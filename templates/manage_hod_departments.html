@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center">
+            <h2><i class="fas fa-building me-2"></i>Manage Departments for {{ hod_user.username }}</h2>
+            <a href="{{ url_for('manage_all_users') }}" class="btn btn-secondary">
+                <i class="fas fa-arrow-left me-2"></i>Back to Manage Users
+            </a>
+        </div>
+        <p class="text-muted">
+            Choose which departments <strong>{{ hod_user.username }}</strong> ({{ hod_user.email }}) can access as HOD.
+            They'll be able to switch between checked departments after logging in.
+        </p>
+    </div>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-md-7">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0"><i class="fas fa-check-square me-2"></i>Department Access</h4>
+            </div>
+            <div class="card-body">
+                <form method="POST">
+                    {% if all_departments %}
+                        <div class="list-group mb-3">
+                            {% for dept in all_departments %}
+                            <label class="list-group-item d-flex align-items-center gap-2">
+                                <input type="checkbox" class="form-check-input mt-0" name="department_ids" value="{{ dept.id }}"
+                                       {% if dept.id in current_dept_ids %}checked{% endif %}>
+                                <span class="flex-grow-1">{{ dept.name }}</span>
+                                {% if dept.hod_id == hod_user.id %}
+                                    <span class="badge bg-success">Official HOD here</span>
+                                {% elif dept.hod %}
+                                    <span class="badge bg-secondary">Official HOD: {{ dept.hod.username }}</span>
+                                {% else %}
+                                    <span class="badge bg-light text-dark">No official HOD</span>
+                                {% endif %}
+                            </label>
+                            {% endfor %}
+                        </div>
+                        <small class="text-muted d-block mb-3">
+                            <i class="fas fa-info-circle me-1"></i>
+                            Checking a department here grants access even if someone else is the "official" HOD shown on Manage Departments.
+                            To change who the official HOD is, use Edit on that department instead.
+                        </small>
+                        <button type="submit" class="btn btn-primary w-100">
+                            <i class="fas fa-save me-2"></i>Save Department Access
+                        </button>
+                    {% else %}
+                        <p class="text-muted mb-0">No departments exist yet.</p>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

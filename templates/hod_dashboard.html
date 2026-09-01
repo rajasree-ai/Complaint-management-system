@@ -1,74 +1,110 @@
 {% extends "base.html" %}
 
 {% block content %}
+
+<!-- Hero Welcome Banner -->
 <div class="row mb-4">
     <div class="col-12">
-        <div class="d-flex justify-content-between align-items-center">
-            <div>
-                <h2><i class="fas fa-building me-2"></i>{{ department }} Department</h2>
-                <p class="text-muted">Department Admin Dashboard - Full access to your department</p>
-            </div>
-            <div class="card bg-primary text-white">
-                <div class="card-body py-2 px-3">
-                    <div class="d-flex align-items-center">
-                        <i class="fas fa-user-tie fa-2x me-3"></i>
-                        <div>
-                            <small>Welcome,</small>
-                            <h5 class="mb-0">{{ current_user.username }}</h5>
-                            <small>Head of Department (Department Admin)</small>
-                        </div>
+        <div class="dashboard-hero">
+            <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+                <div class="d-flex align-items-center gap-3">
+                    <div class="dashboard-avatar">
+                        <i class="fas fa-user-tie"></i>
+                    </div>
+                    <div>
+                        <h3 class="mb-0"><i class="fas fa-building me-2"></i>{{ department }}</h3>
+                        <p class="mb-0 opacity-75">Welcome back, <strong>{{ current_user.username }}</strong> &middot; Head of Department</p>
                     </div>
                 </div>
+                {% if notifications and notifications > 0 %}
+                <a href="{{ url_for('view_notifications') }}" class="btn btn-light btn-sm">
+                    <i class="fas fa-bell me-1"></i> {{ notifications }} new notification{{ 's' if notifications != 1 else '' }}
+                </a>
+                {% endif %}
             </div>
+
+            {% set hod_depts = get_hod_departments(current_user) %}
+            {% if hod_depts|length > 1 %}
+            <div class="mt-3 pt-3" style="border-top: 1px solid rgba(255,255,255,0.2);">
+                <small class="d-block mb-2 opacity-75"><i class="fas fa-layer-group me-1"></i>You manage {{ hod_depts|length }} departments — click to switch:</small>
+                <div class="d-flex flex-wrap gap-2">
+                    {% for dept in hod_depts %}
+                        {% if dept.name == department %}
+                            <span class="dept-pill active"><i class="fas fa-check-circle"></i> {{ dept.name }}</span>
+                        {% else %}
+                            <a href="{{ url_for('switch_hod_department', dept_id=dept.id, next=request.path) }}" class="dept-pill inactive">
+                                <i class="fas fa-exchange-alt"></i> {{ dept.name }}
+                            </a>
+                        {% endif %}
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
         </div>
     </div>
 </div>
 
-<!-- Department Statistics Cards -->
-<div class="row mb-4">
-    <div class="col-md-3 mb-3">
-        <div class="card text-white bg-primary h-100">
-            <div class="card-body text-center">
-                <i class="fas fa-users fa-3x mb-2 opacity-75"></i>
-                <h6 class="card-title">Total Students</h6>
-                <h2 class="mb-0">{{ total_students }}</h2>
-                <small>in {{ department }}</small>
-            </div>
+<!-- Statistics Cards -->
+<div class="row mb-4 g-3">
+    <div class="col-6 col-md-3">
+        <div class="stat-mini-card" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+            <i class="fas fa-user-graduate bg-icon"></i>
+            <div class="stat-value">{{ total_students }}</div>
+            <div class="stat-label">Students</div>
         </div>
     </div>
-    <div class="col-md-3 mb-3">
-        <div class="card text-white bg-info h-100">
-            <div class="card-body text-center">
-                <i class="fas fa-chalkboard-teacher fa-3x mb-2 opacity-75"></i>
-                <h6 class="card-title">Total Staff</h6>
-                <h2 class="mb-0">{{ total_staff }}</h2>
-                <small>in {{ department }}</small>
-            </div>
+    <div class="col-6 col-md-3">
+        <div class="stat-mini-card" style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);">
+            <i class="fas fa-chalkboard-teacher bg-icon"></i>
+            <div class="stat-value">{{ total_staff }}</div>
+            <div class="stat-label">Staff</div>
         </div>
     </div>
-    <div class="col-md-3 mb-3">
-        <div class="card text-white bg-warning h-100">
-            <div class="card-body text-center">
-                <i class="fas fa-clock fa-3x mb-2 opacity-75"></i>
-                <h6 class="card-title">Pending Complaints</h6>
-                <h2 class="mb-0">{{ pending_complaints }}</h2>
-                <small>awaiting action</small>
-            </div>
+    <div class="col-6 col-md-3">
+        <div class="stat-mini-card" style="background: linear-gradient(135deg, #f6d365 0%, #fda085 100%);">
+            <i class="fas fa-clock bg-icon"></i>
+            <div class="stat-value">{{ pending_complaints }}</div>
+            <div class="stat-label">Pending Complaints</div>
         </div>
     </div>
-    <div class="col-md-3 mb-3">
-        <div class="card text-white bg-success h-100">
-            <div class="card-body text-center">
-                <i class="fas fa-check-circle fa-3x mb-2 opacity-75"></i>
-                <h6 class="card-title">Resolved Complaints</h6>
-                <h2 class="mb-0">{{ resolved_complaints }}</h2>
-                <small>completed</small>
-            </div>
+    <div class="col-6 col-md-3">
+        <div class="stat-mini-card" style="background: linear-gradient(135deg, #30cfd0 0%, #330867 100%);">
+            <i class="fas fa-check-circle bg-icon"></i>
+            <div class="stat-value">{{ resolved_complaints }}</div>
+            <div class="stat-label">Resolved</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="stat-mini-card" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+            <i class="fas fa-file-alt bg-icon"></i>
+            <div class="stat-value">{{ total_complaints }}</div>
+            <div class="stat-label">Total Complaints</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="stat-mini-card" style="background: linear-gradient(135deg, #ff9a8b 0%, #ff6a88 100%);">
+            <i class="fas fa-hourglass-half bg-icon"></i>
+            <div class="stat-value">{{ stats.in_progress }}</div>
+            <div class="stat-label">In Progress</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="stat-mini-card" style="background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);">
+            <i class="fas fa-exclamation-triangle bg-icon"></i>
+            <div class="stat-value">{{ overdue_count }}</div>
+            <div class="stat-label">Overdue</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="stat-mini-card" style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);">
+            <i class="fas fa-percentage bg-icon"></i>
+            <div class="stat-value">{{ resolution_rate }}%</div>
+            <div class="stat-label">Resolution Rate</div>
         </div>
     </div>
 </div>
 
-<div class="row">
+<div class="row g-3">
     <div class="col-md-7">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
@@ -144,8 +180,6 @@
     </div>
 
     <div class="col-md-5">
-        <!-- Statistics Chart -->
-        <!-- Statistics Chart -->
         <div class="card">
             <div class="card-header">
                 <h5 class="mb-0"><i class="fas fa-chart-pie me-2"></i>Complaint Distribution</h5>
@@ -164,6 +198,22 @@
                 </div>
             </div>
         </div>
+
+        {% if total_complaints > 0 %}
+        <div class="card mt-3">
+            <div class="card-body">
+                <h6 class="card-title mb-2"><i class="fas fa-percentage me-2"></i>Resolution Rate</h6>
+                <div class="progress" style="height: 22px;">
+                    <div class="progress-bar bg-success" role="progressbar"
+                         style="width: {{ resolution_rate }}%;"
+                         aria-valuenow="{{ resolution_rate }}" aria-valuemin="0" aria-valuemax="100">
+                        {{ resolution_rate }}%
+                    </div>
+                </div>
+                <p class="text-muted small mt-2 mb-0">{{ resolved_complaints }} of {{ total_complaints }} complaints resolved</p>
+            </div>
+        </div>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

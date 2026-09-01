@@ -68,10 +68,21 @@
         <div class="card">
             <div class="card-body">
                 {% if complaints %}
+                    {% if current_user.role != 'student' %}
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="selectAllComplaints" onclick="toggleSelectAllComplaints(this)">
+                            <label class="form-check-label" for="selectAllComplaints">Select All</label>
+                        </div>
+                    </div>
+                    {% endif %}
                     <div class="table-responsive">
                         <table class="table table-hover">
                             <thead>
                                <tr>
+                                    {% if current_user.role != 'student' %}
+                                    <th style="width: 40px;"></th>
+                                    {% endif %}
                                     <th>Complaint ID</th>
                                     <th>Title</th>
                                     <th>Category</th>
@@ -86,6 +97,11 @@
                             <tbody>
                                 {% for complaint in complaints %}
                                 <tr>
+                                    {% if current_user.role != 'student' %}
+                                    <td>
+                                        <input type="checkbox" class="complaint-checkbox" value="{{ complaint.id }}">
+                                    </td>
+                                    {% endif %}
                                     <td>
                                         <span class="badge bg-secondary">{{ complaint.complaint_id }}</span>
                                         {% set original = get_merge_original(complaint) %}
@@ -220,10 +236,55 @@
                     </div>
                     {% if current_user.role != 'student' %}
                     <div class="text-end mt-3">
-                        <a href="{{ url_for('export_complaints_pdf', search=search_query, category=category_filter, status=status_filter, department=department_filter) }}"
-                           class="btn btn-outline-secondary" title="Export visible complaints as PDF">
+                        <span class="text-muted small me-2">Select rows to export only those; otherwise all visible complaints are exported.</span>
+                        <button type="button" class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#complaintColumnsModal">
+                            <i class="fas fa-list-check me-1"></i> Choose Columns
+                        </button>
+                        <button type="button" class="btn btn-outline-success" onclick="exportComplaints('csv')" title="Export selected complaints as CSV">
+                            <i class="fas fa-file-csv me-1"></i> Export CSV
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" onclick="exportComplaints('pdf')" title="Export selected complaints as PDF">
                             <i class="fas fa-file-pdf me-1"></i> Export PDF
-                        </a>
+                        </button>
+                    </div>
+
+                    <!-- Column Picker Modal -->
+                    <div class="modal fade" id="complaintColumnsModal" tabindex="-1" aria-labelledby="complaintColumnsModalLabel" aria-hidden="true">
+                        <div class="modal-dialog">
+                            <div class="modal-content">
+                                <div class="modal-header bg-primary text-white">
+                                    <h5 class="modal-title" id="complaintColumnsModalLabel"><i class="fas fa-list-check me-2"></i>Choose Export Columns</h5>
+                                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                                </div>
+                                <div class="modal-body">
+                                    <p class="text-muted small">Pick which details to include (e.g. parent name, phone, issue description), then use the Export buttons.</p>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="complaintColSelectAll" checked onclick="toggleAllComplaintColumns(this)">
+                                        <label class="form-check-label fw-bold" for="complaintColSelectAll">Select All</label>
+                                    </div>
+                                    <hr>
+                                    {% set complaint_columns = [
+                                        ('complaint_id', 'Complaint ID'), ('student_name', 'Student Name'),
+                                        ('title', 'Title'), ('description', 'Issue / Description'),
+                                        ('category', 'Category'), ('status', 'Status'), ('priority', 'Priority'),
+                                        ('action_taken', 'Action Taken'), ('phone', 'Student Phone'),
+                                        ('parent_name', 'Parent Name'), ('parent_phone', 'Parent Phone'),
+                                        ('created_at', 'Created')
+                                    ] %}
+                                    {% set default_checked_columns = ['complaint_id', 'title', 'category', 'status', 'priority', 'action_taken', 'created_at'] %}
+                                    {% for key, label in complaint_columns %}
+                                    <div class="form-check">
+                                        <input class="form-check-input complaint-col-checkbox" type="checkbox" value="{{ key }}" id="complaintCol_{{ key }}"
+                                               {% if key in default_checked_columns %}checked{% endif %}>
+                                        <label class="form-check-label" for="complaintCol_{{ key }}">{{ label }}</label>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Done</button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     {% endif %}
         
@@ -252,5 +313,35 @@
             return new bootstrap.Tooltip(tooltipTriggerEl);
         });
     });
+
+    function toggleSelectAllComplaints(source) {
+        document.querySelectorAll('.complaint-checkbox').forEach(cb => cb.checked = source.checked);
+    }
+
+    function toggleAllComplaintColumns(source) {
+        document.querySelectorAll('.complaint-col-checkbox').forEach(cb => cb.checked = source.checked);
+    }
+
+    function exportComplaints(format) {
+        const ids = Array.from(document.querySelectorAll('.complaint-checkbox:checked')).map(cb => cb.value);
+        const columns = Array.from(document.querySelectorAll('.complaint-col-checkbox:checked')).map(cb => cb.value);
+        const params = new URLSearchParams();
+
+        {% if search_query %}params.set('search', {{ search_query|tojson }});{% endif %}
+        {% if category_filter %}params.set('category', {{ category_filter|tojson }});{% endif %}
+        {% if status_filter %}params.set('status', {{ status_filter|tojson }});{% endif %}
+        {% if department_filter %}params.set('department', {{ department_filter|tojson }});{% endif %}
+
+        ids.forEach(id => params.append('ids', id));
+        if (columns.length) {
+            params.set('columns', columns.join(','));
+        }
+
+        const base = format === 'pdf'
+            ? "{{ url_for('export_complaints_pdf') }}"
+            : "{{ url_for('export_complaints') }}";
+
+        window.location.href = `${base}?${params.toString()}`;
+    }
 </script>
 {% endblock %}

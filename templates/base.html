@@ -46,13 +46,19 @@
         .nav-link {
             font-weight: 500;
             color: #4a5568 !important;
-            margin: 0 10px;
+            margin: 0 6px;
             position: relative;
             transition: color 0.3s ease;
+            white-space: nowrap;
         }
         
         .nav-link:hover {
             color: #667eea !important;
+        }
+
+        .navbar-nav {
+            flex-wrap: nowrap;
+            align-items: center;
         }
         
         .logout-btn {
@@ -185,11 +191,89 @@
 .deadline-badge.ok { background: #d4edda; color: #155724; }
 .deadline-badge.warning { background: #fff3cd; color: #856404; }
 .deadline-badge.overdue { background: #f8d7da; color: #721c24; }
+
+/* ===== Shared Dashboard Hero + Stat Cards (used by HOD, Staff dashboards) ===== */
+.dashboard-hero {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 18px;
+    color: white;
+    padding: 28px 32px;
+    position: relative;
+    overflow: hidden;
+}
+.dashboard-hero::after {
+    content: '';
+    position: absolute;
+    right: -40px;
+    top: -40px;
+    width: 180px;
+    height: 180px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 50%;
+}
+.dashboard-avatar {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.18);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.6rem;
+}
+.dept-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 14px;
+    border-radius: 20px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.2s ease;
+}
+.dept-pill.active {
+    background: white;
+    color: #667eea;
+}
+.dept-pill.inactive {
+    background: rgba(255,255,255,0.15);
+    color: white;
+    border: 1px solid rgba(255,255,255,0.4);
+}
+.dept-pill.inactive:hover {
+    background: rgba(255,255,255,0.28);
+    color: white;
+}
+.stat-mini-card {
+    border-radius: 16px;
+    padding: 18px;
+    color: white;
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+}
+.stat-mini-card i.bg-icon {
+    position: absolute;
+    right: 10px;
+    bottom: 6px;
+    font-size: 2.8rem;
+    opacity: 0.18;
+}
+.stat-mini-card .stat-value {
+    font-size: 1.9rem;
+    font-weight: 700;
+    line-height: 1.1;
+}
+.stat-mini-card .stat-label {
+    font-size: 0.8rem;
+    opacity: 0.9;
+}
 </style>
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-light">
-        <div class="container">
+        <div class="container-fluid px-4">
             <a class="navbar-brand" href="{{ url_for('index') }}">
                 <i class="fas fa-comment-dots me-2"></i>
                 Grievance Hub

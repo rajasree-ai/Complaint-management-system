@@ -1,4 +1,4 @@
-from flask import Flask, render_template, redirect, url_for, flash, request, abort, jsonify, make_response
+from flask import Flask, render_template, redirect, url_for, flash, request, abort, jsonify, make_response, session
 from flask_login import login_user, current_user, logout_user, login_required
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
@@ -18,7 +18,7 @@ load_dotenv(override=True)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database import db, login_manager
-from models import User, Complaint, Comment, Notification, Department, PasswordResetOTP, StudentStaffAssignment
+from models import User, Complaint, Comment, Notification, Department, PasswordResetOTP, StudentStaffAssignment, HODDepartment
 from forms import (
     RegistrationForm, LoginForm, ComplaintForm, CommentForm, UpdateComplaintForm,
     ForgotPasswordForm, ResetPasswordForm, DepartmentForm, 
@@ -172,6 +172,58 @@ def get_primary_assigned_mentor(student):
     """Return the primary mentor/staff assignment for a student"""
     assignment = StudentStaffAssignment.query.filter_by(student_id=student.id).order_by(StudentStaffAssignment.assigned_at.desc()).first()
     return assignment.staff if assignment else None
+
+
+def get_hod_departments(user):
+    """Return the list of Department objects this HOD has access to (via
+    HODDepartment), sorted by name. Falls back to their primary department
+    (user.department) if the join table has no rows for them yet — this keeps
+    single-department HODs working even before the one-time migration runs."""
+    if user.role != 'hod':
+        return []
+
+    links = HODDepartment.query.filter_by(user_id=user.id).all()
+    if links:
+        dept_ids = [link.department_id for link in links]
+        return Department.query.filter(Department.id.in_(dept_ids)).order_by(Department.name).all()
+
+    # No join-table rows yet: fall back to their primary department string.
+    if user.department:
+        dept = Department.query.filter_by(name=user.department).first()
+        if dept:
+            return [dept]
+    return []
+
+
+def get_active_department(user):
+    """Return the department NAME (string) the HOD is currently operating on.
+    Reads session['active_department_id'], validated against the HOD's actual
+    accessible departments. If the session value is missing/invalid/stale,
+    defaults to the HOD's home department (user.department) if it's one of
+    their accessible departments, otherwise falls back to their first
+    accessible department (alphabetically)."""
+    accessible = get_hod_departments(user)
+
+    active_id = session.get('active_department_id')
+    if active_id:
+        for dept in accessible:
+            if dept.id == active_id:
+                return dept.name
+
+    # Session value missing or no longer valid — default to home department if accessible.
+    for dept in accessible:
+        if dept.name == user.department:
+            session['active_department_id'] = dept.id
+            return dept.name
+
+    # Home department isn't in their accessible list (unusual) — fall back to first accessible.
+    if accessible:
+        session['active_department_id'] = accessible[0].id
+        return accessible[0].name
+
+    return user.department
+
+
 DEFAULT_IMPORT_PASSWORD = os.environ.get('DEFAULT_IMPORT_PASSWORD', 'Grievance@123')
 
 
@@ -276,6 +328,88 @@ def _import_staff(rows, department, default_password):
 
     return {'created': created, 'skipped': skipped, 'errors': errors}
 
+
+def _import_hods(rows, default_password):
+    """Create HOD accounts from parsed CSV rows, or grant additional
+    department access to an existing HOD if the email already exists.
+    Requires a 'department' column per row since super admin isn't scoped
+    to one department. Returns a summary dict with 'created', 'linked'
+    (existing HOD granted a new department), 'skipped', and 'errors'."""
+    required = ['username', 'email', 'department']
+    created, linked, skipped, errors = [], [], [], []
+    hashed_password = generate_password_hash(default_password)
+    departments_by_name = {d.name: d for d in Department.query.all()}
+
+    for i, raw_row in enumerate(rows, start=2):
+        row = {k.strip(): (v.strip() if v else v) for k, v in raw_row.items() if k}
+        missing = [f for f in required if not row.get(f)]
+        if missing:
+            errors.append(f"Row {i}: missing {', '.join(missing)}")
+            continue
+
+        email = row['email'].lower()
+        department_name = row['department']
+
+        if department_name not in departments_by_name:
+            errors.append(f"Row {i}: unknown department '{department_name}'")
+            continue
+
+        dept = departments_by_name[department_name]
+        existing_user = User.query.filter_by(email=email).first()
+
+        if existing_user:
+            # Same person (matched by email) getting access to another
+            # department, rather than a genuine duplicate — link instead of skip.
+            already_linked = HODDepartment.query.filter_by(
+                user_id=existing_user.id, department_id=dept.id
+            ).first()
+            if already_linked:
+                skipped.append(f"Row {i}: {existing_user.username} ({email}) already has access to {department_name}")
+                continue
+
+            if existing_user.role != 'hod':
+                existing_user.role = 'hod'
+
+            db.session.add(HODDepartment(user_id=existing_user.id, department_id=dept.id))
+
+            # If this department has no official HOD yet, make this person official here too.
+            if not dept.hod_id:
+                dept.hod_id = existing_user.id
+
+            linked.append(f"Row {i}: {existing_user.username} ({email}) -> {department_name} (existing HOD, department added)")
+            continue
+
+        if dept.hod_id:
+            skipped.append(f"Row {i}: {department_name} already has an HOD assigned")
+            continue
+
+        hod = User(
+            username=row['username'],
+            email=email,
+            password=hashed_password,
+            role='hod',
+            department=department_name,
+            phone=row.get('phone') or None
+        )
+        db.session.add(hod)
+        db.session.flush()  # get hod.id before committing
+
+        dept.hod_id = hod.id
+        db.session.add(HODDepartment(user_id=hod.id, department_id=dept.id))
+        created.append(f"{row['username']} ({email}) -> {department_name}")
+
+    if created or linked:
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            errors.append("Database error while saving — please retry with the failed rows.")
+            created = []
+            linked = []
+
+    return {'created': created, 'linked': linked, 'skipped': skipped, 'errors': errors}
+
+
 def can_manage_user(user, target_user):
     """Check if user can manage another user"""
     if is_super_admin(user):
@@ -342,7 +476,18 @@ def get_hod_department_by_name(department_name):
     """Get department by name"""
     return Department.query.filter_by(name=department_name).first()
 
-
+def get_top_complaint_department():
+    """Return (department_name, total_complaint_count) for whichever department
+    has the most complaints filed against it, all-time. Returns None if there
+    are no complaints yet."""
+    result = (
+        db.session.query(User.department, func.count(Complaint.id).label('cnt'))
+        .join(Complaint, Complaint.user_id == User.id)
+        .group_by(User.department)
+        .order_by(func.count(Complaint.id).desc())
+        .first()
+    )
+    return result  # (department_name, count) tuple, or None
 def can_delete_user(user):
     """Check if a user can be deleted (no active complaints or assignments)"""
     if user.complaints:
@@ -554,6 +699,27 @@ def initialize_database():
                     print('Ensured student assignment uniqueness index exists')
                 except Exception:
                     app.logger.exception('Could not create unique index for student_staff_assignment')
+
+            # Backfill HODDepartment rows for every department that already has an
+            # hod_id set, so existing single-department HODs keep working under the
+            # new multi-department access model without any manual step.
+            if 'hod_department' in inspector.get_table_names():
+                try:
+                    departments_with_hod = Department.query.filter(Department.hod_id.isnot(None)).all()
+                    backfilled = 0
+                    for dept in departments_with_hod:
+                        existing_link = HODDepartment.query.filter_by(
+                            user_id=dept.hod_id, department_id=dept.id
+                        ).first()
+                        if not existing_link:
+                            db.session.add(HODDepartment(user_id=dept.hod_id, department_id=dept.id))
+                            backfilled += 1
+                    if backfilled:
+                        db.session.commit()
+                        print(f'Backfilled {backfilled} HODDepartment link(s) from existing hod_id values')
+                except Exception:
+                    db.session.rollback()
+                    app.logger.exception('Could not backfill HODDepartment rows')
 
             # Widen phone/parent_phone columns to fit numbers like "999.../888..."
             # that some CSV imports contain (two numbers in one field).
@@ -865,13 +1031,34 @@ def super_admin_dashboard():
 
 # ========== HOD DASHBOARD ==========
 
+@app.route('/hod/switch-department/<int:dept_id>')
+@login_required
+def switch_hod_department(dept_id):
+    """Let a multi-department HOD switch which department they're currently
+    operating on. Only allows switching to a department they actually have
+    access to (via HODDepartment); silently ignores invalid attempts."""
+    if not is_department_admin(current_user):
+        abort(403)
+
+    accessible = get_hod_departments(current_user)
+    if any(dept.id == dept_id for dept in accessible):
+        session['active_department_id'] = dept_id
+        dept = Department.query.get(dept_id)
+        flash(f'Switched to {dept.name} department.', 'info')
+    else:
+        flash('You do not have access to that department.', 'danger')
+
+    next_page = request.args.get('next')
+    return redirect(next_page) if next_page else redirect(url_for('hod_dashboard'))
+
+
 @app.route('/hod/dashboard')
 @login_required
 def hod_dashboard():
     if not is_department_admin(current_user):
         abort(403)
     
-    department_name = current_user.department
+    department_name = get_active_department(current_user)
     complaints = Complaint.query.join(User, Complaint.user_id == User.id).filter(User.department == department_name).all()
     users = User.query.filter_by(department=department_name).all()
     students = User.query.filter_by(department=department_name, role='student').all()
@@ -883,6 +1070,8 @@ def hod_dashboard():
     pending_complaints = stats['pending']
     resolved_complaints = stats['resolved']
     total_complaints = stats['total']
+    resolution_rate = round((resolved_complaints / total_complaints * 100) if total_complaints else 0, 1)
+    overdue_count = sum(1 for c in complaints if c.is_overdue)
     notifications = Notification.query.filter_by(user_id=current_user.id, is_read=False).count()
     
     return render_template('hod_dashboard.html', 
@@ -897,6 +1086,8 @@ def hod_dashboard():
                          pending_complaints=pending_complaints,
                          resolved_complaints=resolved_complaints,
                          total_complaints=total_complaints,
+                         resolution_rate=resolution_rate,
+                         overdue_count=overdue_count,
                          notifications=notifications)
 
 
@@ -913,11 +1104,15 @@ def staff_dashboard():
     ).order_by(Complaint.created_at.desc()).all()
     
     stats = calculate_complaint_stats(complaints)
+    resolution_rate = round((stats['resolved'] / stats['total'] * 100) if stats['total'] else 0, 1)
+    overdue_count = sum(1 for c in complaints if c.is_overdue)
     notifications = Notification.query.filter_by(user_id=current_user.id, is_read=False).count()
     
     return render_template('staff_dashboard.html', 
                          complaints=complaints,
                          stats=stats,
+                         resolution_rate=resolution_rate,
+                         overdue_count=overdue_count,
                          notifications=notifications,
                          staff_name=current_user.username,
                          department=current_user.department)
@@ -1044,12 +1239,141 @@ def mentor_student_complaints(student_id):
 
 # ========== STUDENT EXPORT ROUTES (Staff/Mentor) ==========
 
-def _build_students_pdf(students, title):
+# Canonical list of exportable student fields: (key, column label).
+# Order here is the order columns appear in, regardless of what order the
+# user checked them in the picker UI.
+STUDENT_EXPORT_COLUMNS = [
+    ('roll_number', 'Roll Number'),
+    ('username', 'Name'),
+    ('email', 'Email'),
+    ('year', 'Year'),
+    ('section', 'Section'),
+    ('mentor', 'Mentor'),
+    ('phone', 'Phone'),
+    ('parent_name', 'Parent Name'),
+    ('parent_phone', 'Parent Phone'),
+    ('address', 'Address'),
+]
+
+
+def _student_row_dict(student, mentor=None):
+    """Build a flat dict of every exportable field for one student. Pass a
+    precomputed mentor to avoid an extra query per row when the caller
+    already looked it up (e.g. inside a loop that also needs it for grouping)."""
+    if mentor is None:
+        mentor = get_primary_assigned_mentor(student)
+    return {
+        'roll_number': student.roll_number or '',
+        'username': student.username,
+        'email': student.email,
+        'year': student.year or '',
+        'section': student.section or '',
+        'mentor': mentor.username if mentor else 'Not assigned',
+        'phone': student.phone or '',
+        'parent_name': student.parent_name or '',
+        'parent_phone': student.parent_phone or '',
+        'address': student.address or '',
+    }
+
+
+def _resolve_export_columns(requested_keys, all_columns):
+    """Filter all_columns (list of (key,label)) down to just the requested
+    keys, preserving the canonical order. If requested_keys is empty or
+    matches nothing, falls back to all_columns so an export never comes back
+    with zero columns (e.g. a stale bookmark with no ?columns= param)."""
+    if not requested_keys:
+        return all_columns
+    requested_set = set(requested_keys)
+    filtered = [(key, label) for key, label in all_columns if key in requested_set]
+    return filtered if filtered else all_columns
+
+
+def _get_requested_columns():
+    """Read ?columns=key1,key2,... from the query string."""
+    raw = request.args.get('columns', '')
+    return [c.strip() for c in raw.split(',') if c.strip()]
+
+
+# Relative width weights per column key, used to proportionally divide the
+# available page width so PDF table columns never overflow or overlap.
+# Wider fields (email, address, description) get more weight; short fields
+# (year, section, priority) get less. Unlisted keys default to 1.0.
+PDF_COLUMN_WIDTH_WEIGHTS = {
+    'roll_number': 0.9,
+    'username': 1.2,
+    'email': 1.7,
+    'year': 0.6,
+    'section': 0.6,
+    'mentor': 1.1,
+    'phone': 1.0,
+    'parent_name': 1.2,
+    'parent_phone': 1.0,
+    'address': 2.0,
+    'complaint_id': 0.9,
+    'student_name': 1.1,
+    'title': 1.4,
+    'description': 2.2,
+    'category': 0.9,
+    'status': 0.8,
+    'priority': 0.7,
+    'action_taken': 1.6,
+    'created_at': 1.0,
+}
+
+
+def _build_pdf_table(selected_columns, row_dicts, available_width, header_bg='#343a40'):
+    """Build a reportlab Table for an export PDF where every cell is a
+    word-wrapping Paragraph and column widths are proportionally sized to
+    available_width — this is what prevents columns from overlapping or
+    text spilling outside its cell, regardless of how many columns are
+    selected or how long the content is (long emails/addresses included,
+    since wordWrap='CJK' allows breaking mid-word if there's no space)."""
+    from reportlab.lib import colors
+    from reportlab.platypus import Table, TableStyle, Paragraph
+    from reportlab.lib.styles import ParagraphStyle
+
+    header_style = ParagraphStyle(
+        'PdfTableHeader', fontName='Helvetica-Bold', fontSize=7.5,
+        leading=9, textColor=colors.white, wordWrap='CJK'
+    )
+    cell_style = ParagraphStyle(
+        'PdfTableCell', fontName='Helvetica', fontSize=7,
+        leading=8.5, wordWrap='CJK'
+    )
+
+    header_row = [Paragraph(label, header_style) for key, label in selected_columns]
+    table_data = [header_row]
+    for row in row_dicts:
+        table_data.append([
+            Paragraph(str(row.get(key) or '-'), cell_style)
+            for key, label in selected_columns
+        ])
+
+    weights = [PDF_COLUMN_WIDTH_WEIGHTS.get(key, 1.0) for key, label in selected_columns]
+    total_weight = sum(weights) or 1.0
+    col_widths = [available_width * (w / total_weight) for w in weights]
+
+    table = Table(table_data, colWidths=col_widths, repeatRows=1)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor(header_bg)),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f2f2f2')]),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    return table
+
+
+def _build_students_pdf(students, title, columns=None):
     from io import BytesIO
     from reportlab.lib.pagesizes import landscape, letter
-    from reportlab.lib import colors
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
     from reportlab.lib.styles import getSampleStyleSheet
+
+    selected = _resolve_export_columns(columns, STUDENT_EXPORT_COLUMNS)
 
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
@@ -1064,28 +1388,8 @@ def _build_students_pdf(students, title):
     ))
     story.append(Spacer(1, 12))
 
-    table_data = [['Roll No', 'Name', 'Email', 'Year/Section', 'Phone']]
-    for s in students:
-        year_section = f"{s.year} {s.section}" if s.year and s.section else "-"
-        table_data.append([
-            s.roll_number or '-',
-            s.username,
-            s.email,
-            year_section,
-            s.phone or '-'
-        ])
-
-    table = Table(table_data, repeatRows=1)
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#343a40')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONTSIZE', (0, 0), (-1, -1), 8),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f2f2f2')]),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-    ]))
+    row_dicts = [_student_row_dict(s) for s in students]
+    table = _build_pdf_table(selected, row_dicts, doc.width)
     story.append(table)
 
     doc.build(story)
@@ -1093,24 +1397,18 @@ def _build_students_pdf(students, title):
     return buffer
 
 
-def _build_students_csv(students):
+def _build_students_csv(students, columns=None):
     import csv
     from io import StringIO
 
+    selected = _resolve_export_columns(columns, STUDENT_EXPORT_COLUMNS)
+
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow(['Roll Number', 'Name', 'Email', 'Year', 'Section', 'Phone', 'Parent Name', 'Parent Phone'])
+    writer.writerow([label for key, label in selected])
     for s in students:
-        writer.writerow([
-            s.roll_number or '',
-            s.username,
-            s.email,
-            s.year or '',
-            s.section or '',
-            s.phone or '',
-            s.parent_name or '',
-            s.parent_phone or ''
-        ])
+        row = _student_row_dict(s)
+        writer.writerow([row[key] for key, label in selected])
     output.seek(0)
     return output
 
@@ -1122,7 +1420,7 @@ def export_department_students_csv():
         abort(403)
     from flask import Response
     students = User.query.filter_by(department=current_user.department, role='student').order_by(User.roll_number).all()
-    csv_data = _build_students_csv(students)
+    csv_data = _build_students_csv(students, columns=_get_requested_columns())
     filename = f"department_students_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
     return Response(
         csv_data.getvalue(),
@@ -1138,7 +1436,7 @@ def export_department_students_pdf():
         abort(403)
     from flask import send_file
     students = User.query.filter_by(department=current_user.department, role='student').order_by(User.roll_number).all()
-    buffer = _build_students_pdf(students, f"All Students - {current_user.department}")
+    buffer = _build_students_pdf(students, f"All Students - {current_user.department}", columns=_get_requested_columns())
     filename = f"department_students_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.pdf"
     return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
 
@@ -1154,7 +1452,7 @@ def export_assigned_students_csv():
         department=current_user.department
     ).all()
     students = [a.student for a in assignments if a.student]
-    csv_data = _build_students_csv(students)
+    csv_data = _build_students_csv(students, columns=_get_requested_columns())
     filename = f"my_assigned_students_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
     return Response(
         csv_data.getvalue(),
@@ -1174,7 +1472,7 @@ def export_assigned_students_pdf():
         department=current_user.department
     ).all()
     students = [a.student for a in assignments if a.student]
-    buffer = _build_students_pdf(students, f"My Assigned Students - {current_user.username}")
+    buffer = _build_students_pdf(students, f"My Assigned Students - {current_user.username}", columns=_get_requested_columns())
     filename = f"my_assigned_students_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.pdf"
     return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
 # ========== STUDENT EXPORT ROUTES (HOD - year/section wise) ==========
@@ -1185,35 +1483,16 @@ def export_hod_students_csv():
     if not is_department_admin(current_user):
         abort(403)
     from flask import Response
-    import csv
-    from io import StringIO
 
+    department_name = get_active_department(current_user)
     students = User.query.filter_by(
-        department=current_user.department, role='student'
+        department=department_name, role='student'
     ).order_by(User.year, User.section, User.roll_number).all()
 
-    output = StringIO()
-    writer = csv.writer(output)
-    writer.writerow(['Year', 'Section', 'Roll Number', 'Name', 'Email', 'Mentor', 'Phone', 'Parent Name', 'Parent Phone'])
-
-    for s in students:
-        mentor = get_primary_assigned_mentor(s)
-        writer.writerow([
-            s.year or '',
-            s.section or '',
-            s.roll_number or '',
-            s.username,
-            s.email,
-            mentor.username if mentor else 'Not assigned',
-            s.phone or '',
-            s.parent_name or '',
-            s.parent_phone or ''
-        ])
-
-    output.seek(0)
-    filename = f"{current_user.department}_students_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
+    csv_data = _build_students_csv(students, columns=_get_requested_columns())
+    filename = f"{department_name}_students_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
     return Response(
-        output.getvalue(),
+        csv_data.getvalue(),
         mimetype='text/csv',
         headers={'Content-Disposition': f'attachment; filename={filename}'}
     )
@@ -1227,21 +1506,23 @@ def export_hod_students_pdf():
     from io import BytesIO
     from flask import send_file
     from reportlab.lib.pagesizes import landscape, letter
-    from reportlab.lib import colors
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
     from reportlab.lib.styles import getSampleStyleSheet
     from itertools import groupby
 
+    department_name = get_active_department(current_user)
     students = User.query.filter_by(
-        department=current_user.department, role='student'
+        department=department_name, role='student'
     ).order_by(User.year, User.section, User.roll_number).all()
+
+    selected = _resolve_export_columns(_get_requested_columns(), STUDENT_EXPORT_COLUMNS)
 
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
     styles = getSampleStyleSheet()
     story = []
 
-    story.append(Paragraph(f"{current_user.department} - Students by Year/Section", styles['Title']))
+    story.append(Paragraph(f"{department_name} - Students by Year/Section", styles['Title']))
     story.append(Paragraph(
         f"Generated: {datetime.utcnow().strftime('%d-%m-%Y %H:%M')} UTC &nbsp;&nbsp; "
         f"Total: {len(students)}",
@@ -1258,35 +1539,15 @@ def export_hod_students_pdf():
         story.append(Paragraph(f"Year {year}, Section {section} &nbsp; ({len(group_list)} students)", styles['Heading2']))
         story.append(Spacer(1, 6))
 
-        table_data = [['Roll No', 'Name', 'Email', 'Mentor', 'Phone']]
-        for s in group_list:
-            mentor = get_primary_assigned_mentor(s)
-            table_data.append([
-                s.roll_number or '-',
-                s.username,
-                s.email,
-                mentor.username if mentor else '-',
-                s.phone or '-'
-            ])
-
-        table = Table(table_data, repeatRows=1)
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#343a40')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('FONTSIZE', (0, 0), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f2f2f2')]),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ]))
+        row_dicts = [_student_row_dict(s) for s in group_list]
+        table = _build_pdf_table(selected, row_dicts, doc.width)
         story.append(table)
         story.append(Spacer(1, 16))
 
     doc.build(story)
     buffer.seek(0)
 
-    filename = f"{current_user.department}_students_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.pdf"
+    filename = f"{department_name}_students_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.pdf"
     return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
 @app.route('/send-message/<int:student_id>', methods=['POST'])
 @login_required
@@ -1408,6 +1669,51 @@ def mentor_delete_student(student_id):
     return redirect(url_for('mentor_students'))
 
 
+# ========== MENTOR BULK STUDENT UPLOAD ROUTE ==========
+
+@app.route('/mentor/students/upload', methods=['GET', 'POST'])
+@login_required
+def upload_students_csv():
+    """Mentor bulk-uploads students into their own department via CSV."""
+    if current_user.role != 'staff':
+        abort(403)
+
+    if request.method == 'GET':
+        return render_template('upload_students_csv.html', department=current_user.department)
+
+    file = request.files.get('csv_file')
+    if not file or file.filename == '':
+        flash('Please choose a CSV file to upload.', 'danger')
+        return redirect(url_for('upload_students_csv'))
+
+    if not file.filename.lower().endswith('.csv'):
+        flash('Only .csv files are supported.', 'danger')
+        return redirect(url_for('upload_students_csv'))
+
+    try:
+        rows, fieldnames = _parse_csv_stream(file)
+    except Exception as e:
+        flash(f'Could not read the CSV file: {e}', 'danger')
+        return redirect(url_for('upload_students_csv'))
+
+    if not rows:
+        flash('The CSV file appears to be empty.', 'danger')
+        return redirect(url_for('upload_students_csv'))
+
+    result = _import_students(rows, current_user.department, DEFAULT_IMPORT_PASSWORD)
+
+    if result['created']:
+        flash(f"Imported {len(result['created'])} student(s) successfully.", 'success')
+    if result['skipped']:
+        flash(f"{len(result['skipped'])} row(s) skipped (already exist).", 'warning')
+    if result['errors']:
+        flash(f"{len(result['errors'])} row(s) had errors.", 'danger')
+
+    return render_template('upload_students_csv.html',
+                            department=current_user.department,
+                            result=result)
+
+
 # ========== COMPLAINT ROUTES ==========
 @app.route('/api/suggest-category', methods=['POST'])
 @login_required
@@ -1505,7 +1811,33 @@ Grievance Hub
                 f'New complaint from {current_user.username} in {current_user.department} department',
                 'new_complaint'
             )
-        
+
+        # Real-time alert to super admin: which department currently has the most complaints overall
+        top_dept_result = get_top_complaint_department()
+        if top_dept_result:
+            top_department, top_count = top_dept_result
+            super_admins = [u for u in User.query.filter_by(role='admin').all() if is_super_admin(u)]
+            for admin in super_admins:
+                create_notification(
+                    admin.id,
+                    None,
+                    f'"{top_department}" currently has the most complaints overall ({top_count} total).',
+                    'department_alert'
+                )
+                send_email_notification(
+                    admin.email,
+                    'Department Complaint Alert - Grievance Hub',
+                    f'''Dear {admin.username},
+
+As of the latest complaint submission, "{top_department}" currently has the highest
+number of total complaints across all departments ({top_count} complaints).
+
+This is an automated real-time alert sent whenever a new complaint is filed.
+
+Thank you,
+Grievance Hub'''
+                )
+
         flash('Your complaint has been submitted!', 'success')
         return redirect(url_for('view_complaints'))
     
@@ -1550,6 +1882,10 @@ def view_complaints():
     if category_filter:
         query = query.filter(Complaint.category == category_filter)
 
+    ai_category_filter = request.args.get('ai_category', '')
+    if ai_category_filter:
+        query = query.filter(Complaint.ai_category == ai_category_filter)
+
     if status_filter:
         query = query.filter(Complaint.status == status_filter)
 
@@ -1589,26 +1925,64 @@ def view_complaints():
         departments=departments,
         department_filter=department_filter
     )
-@app.route('/complaints/export/pdf')
-@login_required
-def export_complaints_pdf():
-    from io import BytesIO
-    from reportlab.lib.pagesizes import landscape, letter
-    from reportlab.lib import colors
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-    from reportlab.lib.styles import getSampleStyleSheet
-    from flask import send_file
+# Canonical list of exportable complaint fields: (key, column label).
+COMPLAINT_EXPORT_COLUMNS = [
+    ('complaint_id', 'Complaint ID'),
+    ('student_name', 'Student Name'),
+    ('title', 'Title'),
+    ('description', 'Issue / Description'),
+    ('category', 'Category'),
+    ('status', 'Status'),
+    ('priority', 'Priority'),
+    ('action_taken', 'Action Taken'),
+    ('phone', 'Student Phone'),
+    ('parent_name', 'Parent Name'),
+    ('parent_phone', 'Parent Phone'),
+    ('created_at', 'Created'),
+]
 
-    search_query = request.args.get('search', '')
-    category_filter = request.args.get('category', '')
-    status_filter = request.args.get('status', '')
-    department_filter = request.args.get('department', '')
-    # Same role-based access logic as view_complaints
+# Columns included when the user hasn't picked any via the column picker
+# (e.g. a bare URL hit with no ?columns= param) — matches the original
+# default export shape so nothing breaks for existing links/bookmarks.
+DEFAULT_COMPLAINT_EXPORT_COLUMNS = [
+    'complaint_id', 'title', 'category', 'status', 'priority', 'action_taken', 'created_at'
+]
+
+
+def _complaint_row_dict(c):
+    author = c.author
+    return {
+        'complaint_id': c.complaint_id,
+        'student_name': author.username if author else '',
+        'title': c.title,
+        'description': c.description or '',
+        'category': c.category,
+        'status': c.status.replace('_', ' ').title(),
+        'priority': c.priority.title(),
+        'action_taken': c.action_taken or '',
+        'phone': (author.phone if author else '') or '',
+        'parent_name': (author.parent_name if author else '') or '',
+        'parent_phone': (author.parent_phone if author else '') or '',
+        'created_at': c.created_at.strftime('%d-%m-%Y %H:%M'),
+    }
+
+
+def _resolve_complaint_columns(requested_keys):
+    """Like _resolve_export_columns, but falls back to the original default
+    column set (not every field) when nothing was explicitly requested."""
+    base = requested_keys if requested_keys else DEFAULT_COMPLAINT_EXPORT_COLUMNS
+    requested_set = set(base)
+    filtered = [(key, label) for key, label in COMPLAINT_EXPORT_COLUMNS if key in requested_set]
+    return filtered if filtered else COMPLAINT_EXPORT_COLUMNS
+
+
+def _scope_complaints_query(search_query, category_filter, status_filter):
+    """Role-based base query shared by both complaint export routes."""
     if is_super_admin(current_user):
         query = Complaint.query
     elif is_department_admin(current_user):
         query = Complaint.query.join(User, Complaint.user_id == User.id).filter(
-            User.department == current_user.department
+            User.department == get_active_department(current_user)
         )
     elif current_user.role in ['staff', 'mentor']:
         query = Complaint.query.filter(
@@ -1627,7 +2001,32 @@ def export_complaints_pdf():
     if status_filter:
         query = query.filter_by(status=status_filter)
 
+    return query
+
+
+@app.route('/complaints/export/pdf')
+@login_required
+def export_complaints_pdf():
+    from io import BytesIO
+    from reportlab.lib.pagesizes import landscape, letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    from flask import send_file
+
+    search_query = request.args.get('search', '')
+    category_filter = request.args.get('category', '')
+    status_filter = request.args.get('status', '')
+
+    query = _scope_complaints_query(search_query, category_filter, status_filter)
+
+    selected_ids = request.args.getlist('ids')
+    if selected_ids:
+        id_list = [int(i) for i in selected_ids if i.isdigit()]
+        if id_list:
+            query = query.filter(Complaint.id.in_(id_list))
+
     complaints = query.order_by(Complaint.created_at.desc()).all()
+    selected_columns = _resolve_complaint_columns(_get_requested_columns())
 
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
@@ -1642,29 +2041,18 @@ def export_complaints_pdf():
     ))
     story.append(Spacer(1, 12))
 
-    table_data = [['Complaint ID', 'Title', 'Category', 'Status', 'Priority', 'Action Taken', 'Created']]
-    for c in complaints:
-        table_data.append([
-            c.complaint_id,
-            c.title[:40],
-            c.category,
-            c.status.replace('_', ' ').title(),
-            c.priority.title(),
-            (c.action_taken[:60] + '...') if c.action_taken and len(c.action_taken) > 60 else (c.action_taken or '-'),
-            c.created_at.strftime('%d-%m-%Y')
-        ])
+    def capped_row(c):
+        # Word-wrapping cells handle normal-length text fine; only cap
+        # pathologically long free-text fields so a single row can't blow
+        # up to an unreadable page-and-a-half of height.
+        row = _complaint_row_dict(c)
+        for key in ('title', 'description', 'action_taken'):
+            if row.get(key) and len(row[key]) > 300:
+                row[key] = row[key][:300] + '...'
+        return row
 
-    table = Table(table_data, repeatRows=1)
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#343a40')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONTSIZE', (0, 0), (-1, -1), 8),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f2f2f2')]),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-    ]))
+    row_dicts = [capped_row(c) for c in complaints]
+    table = _build_pdf_table(selected_columns, row_dicts, doc.width)
     story.append(table)
 
     doc.build(story)
@@ -1682,47 +2070,25 @@ def export_complaints():
     search_query = request.args.get('search', '')
     category_filter = request.args.get('category', '')
     status_filter = request.args.get('status', '')
- 
-    # Same role-based access logic as view_complaints / export_complaints_pdf
-    if is_super_admin(current_user):
-        query = Complaint.query
-    elif is_department_admin(current_user):
-        query = Complaint.query.join(User, Complaint.user_id == User.id).filter(
-            User.department == current_user.department
-        )
-    elif current_user.role in ['staff', 'mentor']:
-        query = Complaint.query.filter(
-            (Complaint.assigned_to == current_user.id) | (Complaint.mentor_id == current_user.id)
-        )
-    else:
-        query = Complaint.query.filter_by(user_id=current_user.id)
- 
-    if search_query:
-        query = query.filter(
-            Complaint.complaint_id.ilike(f'%{search_query}%') |
-            Complaint.title.ilike(f'%{search_query}%')
-        )
-    if category_filter:
-        query = query.filter_by(category=category_filter)
-    if status_filter:
-        query = query.filter_by(status=status_filter)
+
+    query = _scope_complaints_query(search_query, category_filter, status_filter)
+
+    selected_ids = request.args.getlist('ids')
+    if selected_ids:
+        id_list = [int(i) for i in selected_ids if i.isdigit()]
+        if id_list:
+            query = query.filter(Complaint.id.in_(id_list))
  
     complaints = query.order_by(Complaint.created_at.desc()).all()
+    selected_columns = _resolve_complaint_columns(_get_requested_columns())
  
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow(['Complaint ID', 'Title', 'Category', 'Status', 'Priority', 'Action Taken', 'Created'])
+    writer.writerow([label for key, label in selected_columns])
  
     for c in complaints:
-        writer.writerow([
-            c.complaint_id,
-            c.title,
-            c.category,
-            c.status.replace('_', ' ').title(),
-            c.priority.title(),
-            c.action_taken or '',
-            c.created_at.strftime('%d-%m-%Y %H:%M')
-        ])
+        row = _complaint_row_dict(c)
+        writer.writerow([row[key] for key, label in selected_columns])
  
     output.seek(0)
     filename = f"complaints_export_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
@@ -1981,11 +2347,13 @@ def department_users():
     if not is_department_admin(current_user):
         abort(403)
 
-    users = User.query.filter_by(department=current_user.department).all()
-    staff = get_department_staff(current_user.department)
+    department_name = get_active_department(current_user)
+
+    users = User.query.filter_by(department=department_name).all()
+    staff = get_department_staff(department_name)
 
     # Distinct sections and years in this department, for the filter dropdowns
-    all_dept_students = get_department_students(current_user.department)
+    all_dept_students = get_department_students(department_name)
     sections = sorted({s.section for s in all_dept_students if s.section})
     years = sorted({s.year for s in all_dept_students if s.year})
 
@@ -2006,7 +2374,7 @@ def department_users():
             return (0, int(match.group(1)), student.roll_number)
         return (0, 0, student.roll_number)
 
-    students_query = User.query.filter_by(department=current_user.department, role='student')
+    students_query = User.query.filter_by(department=department_name, role='student')
     if section_filter:
         students_query = students_query.filter_by(section=section_filter)
     if year_filter:
@@ -2023,7 +2391,7 @@ def department_users():
                          users=users,
                          students=students,
                          staff=staff,
-                         department=current_user.department,
+                         department=department_name,
                          student_mentors=student_mentors,
                          sections=sections,
                          section_filter=section_filter,
@@ -2036,17 +2404,35 @@ def department_change_user_role(user_id, role):
         abort(403)
     
     user = User.query.get_or_404(user_id)
-    
-    if user.department != current_user.department:
+
+    accessible_dept_names = {d.name for d in get_hod_departments(current_user)}
+    if user.department not in accessible_dept_names:
         abort(403)
     
     if user.id == current_user.id:
         flash('You cannot change your own role!', 'danger')
         return redirect(url_for('department_users'))
     
-    if role not in ['student', 'staff']:
+    if role not in ['student', 'staff', 'hod']:
         flash('Invalid role specified!', 'danger')
         return redirect(url_for('department_users'))
+
+    dept = Department.query.filter_by(name=user.department).first()
+
+    if role == 'hod':
+        # Only one HOD per department: demote whoever currently holds it (if anyone).
+        if dept and dept.hod_id and dept.hod_id != user.id:
+            existing_hod = User.query.get(dept.hod_id)
+            if existing_hod:
+                existing_hod.role = 'staff'
+                flash(f'"{existing_hod.username}" was demoted from HOD to Staff.', 'info')
+        if dept:
+            dept.hod_id = user.id
+    else:
+        # If this user was this department's HOD and is being moved to another
+        # role, clear the department's hod_id so it doesn't point at a non-HOD user.
+        if dept and dept.hod_id == user.id:
+            dept.hod_id = None
     
     old_role = user.role
     user.role = role
@@ -2065,8 +2451,9 @@ def department_delete_user(user_id):
         abort(403)
     
     user = User.query.get_or_404(user_id)
-    
-    if user.department != current_user.department:
+
+    accessible_dept_names = {d.name for d in get_hod_departments(current_user)}
+    if user.department not in accessible_dept_names:
         abort(403)
     
     if user.id == current_user.id:
@@ -2107,14 +2494,8 @@ def department_delete_user(user_id):
 
 # ========== STAFF MANAGEMENT ROUTES (HOD) ==========
 
-@app.route('/department/manage-staff')
-@login_required
-def manage_staff():
-    if not is_department_admin(current_user):
-        abort(403)
-    
-    staff_members = User.query.filter_by(department=current_user.department, role='staff').all()
-    
+def _compute_staff_stats(staff_members):
+    """Build the assigned/resolved/performance stats dict list for a list of staff Users."""
     staff_stats = []
     for staff in staff_members:
         assigned_complaints = Complaint.query.filter(
@@ -2124,15 +2505,141 @@ def manage_staff():
             ((Complaint.assigned_to == staff.id) | (Complaint.mentor_id == staff.id)) &
             (Complaint.status == 'resolved')
         ).count()
-        
+
         staff_stats.append({
             'user': staff,
             'assigned': assigned_complaints,
             'resolved': resolved_complaints,
             'performance': round((resolved_complaints / assigned_complaints * 100) if assigned_complaints > 0 else 0, 2)
         })
+    return staff_stats
+
+
+def _build_staff_csv(staff_stats):
+    import csv
+    from io import StringIO
+
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['Name', 'Email', 'Phone', 'Assigned Complaints', 'Resolved', 'Performance (%)'])
+    for s in staff_stats:
+        writer.writerow([
+            s['user'].username,
+            s['user'].email,
+            s['user'].phone or '',
+            s['assigned'],
+            s['resolved'],
+            s['performance']
+        ])
+    output.seek(0)
+    return output
+
+
+def _build_staff_pdf(staff_stats, title):
+    from io import BytesIO
+    from reportlab.lib.pagesizes import landscape, letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph(title, styles['Title']))
+    story.append(Paragraph(
+        f"Generated: {datetime.utcnow().strftime('%d-%m-%Y %H:%M')} UTC &nbsp;&nbsp; "
+        f"Total: {len(staff_stats)}",
+        styles['Normal']
+    ))
+    story.append(Spacer(1, 12))
+
+    staff_columns = [
+        ('username', 'Name'), ('email', 'Email'), ('phone', 'Phone'),
+        ('assigned', 'Assigned'), ('resolved', 'Resolved'), ('performance', 'Performance'),
+    ]
+    row_dicts = []
+    for s in staff_stats:
+        row_dicts.append({
+            'username': s['user'].username,
+            'email': s['user'].email,
+            'phone': s['user'].phone or '-',
+            'assigned': str(s['assigned']),
+            'resolved': str(s['resolved']),
+            'performance': f"{s['performance']}%",
+        })
+
+    table = _build_pdf_table(staff_columns, row_dicts, doc.width)
+    story.append(table)
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+
+@app.route('/department/manage-staff')
+@login_required
+def manage_staff():
+    if not is_department_admin(current_user):
+        abort(403)
     
-    return render_template('manage_staff.html', staff_stats=staff_stats, department=current_user.department)
+    department_name = get_active_department(current_user)
+    staff_members = User.query.filter_by(department=department_name, role='staff').all()
+    staff_stats = _compute_staff_stats(staff_members)
+    
+    return render_template('manage_staff.html', staff_stats=staff_stats, department=department_name)
+
+
+@app.route('/department/staff/export/csv')
+@login_required
+def export_department_staff_csv():
+    """Export staff in the HOD's active department as CSV. Supports ?ids=1&ids=2... for
+    exporting only the selected rows; falls back to exporting all staff otherwise."""
+    if not is_department_admin(current_user):
+        abort(403)
+    from flask import Response
+
+    department_name = get_active_department(current_user)
+    staff_members = User.query.filter_by(department=department_name, role='staff').all()
+
+    selected_ids = request.args.getlist('ids')
+    if selected_ids:
+        id_list = {int(i) for i in selected_ids if i.isdigit()}
+        if id_list:
+            staff_members = [s for s in staff_members if s.id in id_list]
+
+    staff_stats = _compute_staff_stats(staff_members)
+    csv_data = _build_staff_csv(staff_stats)
+    filename = f"staff_{department_name}_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
+    return Response(
+        csv_data.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename={filename}'}
+    )
+
+
+@app.route('/department/staff/export/pdf')
+@login_required
+def export_department_staff_pdf():
+    """Export staff in the HOD's active department as PDF. Supports ?ids=1&ids=2... for
+    exporting only the selected rows; falls back to exporting all staff otherwise."""
+    if not is_department_admin(current_user):
+        abort(403)
+    from flask import send_file
+
+    department_name = get_active_department(current_user)
+    staff_members = User.query.filter_by(department=department_name, role='staff').all()
+
+    selected_ids = request.args.getlist('ids')
+    if selected_ids:
+        id_list = {int(i) for i in selected_ids if i.isdigit()}
+        if id_list:
+            staff_members = [s for s in staff_members if s.id in id_list]
+
+    staff_stats = _compute_staff_stats(staff_members)
+    buffer = _build_staff_pdf(staff_stats, f"Staff - {department_name}")
+    filename = f"staff_{department_name}_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.pdf"
+    return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
 
 
 @app.route('/department/staff/<int:staff_id>/delete', methods=['POST'])
@@ -2142,8 +2649,9 @@ def delete_staff(staff_id):
         abort(403)
     
     staff = User.query.get_or_404(staff_id)
-    
-    if staff.department != current_user.department:
+
+    accessible_dept_names = {d.name for d in get_hod_departments(current_user)}
+    if staff.department not in accessible_dept_names:
         abort(403)
     
     if staff.role != 'staff':
@@ -2176,6 +2684,8 @@ def delete_staff(staff_id):
 def add_department_staff():
     if not is_department_admin(current_user):
         abort(403)
+
+    department_name = get_active_department(current_user)
     
     if request.method == 'POST':
         username = request.form.get('username')
@@ -2193,7 +2703,7 @@ def add_department_staff():
             email=email,
             password=hashed_password,
             role='staff',
-            department=current_user.department
+            department=department_name
         )
         db.session.add(staff)
         db.session.commit()
@@ -2210,7 +2720,7 @@ Login Credentials:
 ------------------
 Email: {email}
 Password: {password}
-Department: {current_user.department}
+Department: {department_name}
 
 You can now:
 - View complaints assigned to you
@@ -2225,10 +2735,57 @@ Thank you
 '''
         send_email_notification(email, subject, body)
         
-        flash(f'Staff/Mentor "{username}" added to {current_user.department} department!', 'success')
+        flash(f'Staff/Mentor "{username}" added to {department_name} department!', 'success')
         return redirect(url_for('department_users'))
     
-    return render_template('add_department_staff.html', department=current_user.department)
+    return render_template('add_department_staff.html', department=department_name)
+
+
+# ========== HOD BULK STAFF UPLOAD ROUTE ==========
+
+@app.route('/department/staff/upload', methods=['GET', 'POST'])
+@login_required
+def upload_staff_csv():
+    """HOD bulk-uploads staff into their active department via CSV."""
+    if not is_department_admin(current_user):
+        abort(403)
+
+    department_name = get_active_department(current_user)
+
+    if request.method == 'GET':
+        return render_template('upload_staff_csv.html', department=department_name)
+
+    file = request.files.get('csv_file')
+    if not file or file.filename == '':
+        flash('Please choose a CSV file to upload.', 'danger')
+        return redirect(url_for('upload_staff_csv'))
+
+    if not file.filename.lower().endswith('.csv'):
+        flash('Only .csv files are supported.', 'danger')
+        return redirect(url_for('upload_staff_csv'))
+
+    try:
+        rows, fieldnames = _parse_csv_stream(file)
+    except Exception as e:
+        flash(f'Could not read the CSV file: {e}', 'danger')
+        return redirect(url_for('upload_staff_csv'))
+
+    if not rows:
+        flash('The CSV file appears to be empty.', 'danger')
+        return redirect(url_for('upload_staff_csv'))
+
+    result = _import_staff(rows, department_name, DEFAULT_IMPORT_PASSWORD)
+
+    if result['created']:
+        flash(f"Imported {len(result['created'])} staff member(s) successfully.", 'success')
+    if result['skipped']:
+        flash(f"{len(result['skipped'])} row(s) skipped (already exist).", 'warning')
+    if result['errors']:
+        flash(f"{len(result['errors'])} row(s) had errors.", 'danger')
+
+    return render_template('upload_staff_csv.html',
+                            department=department_name,
+                            result=result)
 
 
 # ========== CSV BULK IMPORT ==========
@@ -2449,14 +3006,15 @@ def assign_students():
     if not is_department_admin(current_user):
         abort(403)
 
-    form = StudentStaffAssignmentForm(current_user.department)
+    department_name = get_active_department(current_user)
+    form = StudentStaffAssignmentForm(department_name)
 
-    staff_members = User.query.filter_by(department=current_user.department, role='staff').all()
+    staff_members = User.query.filter_by(department=department_name, role='staff').all()
     staff_assignments = {}
     for staff in staff_members:
         assignments = StudentStaffAssignment.query.filter_by(
             staff_id=staff.id,
-            department=current_user.department
+            department=department_name
         ).all()
         if assignments:
             staff_assignments[staff.id] = {
@@ -2598,27 +3156,28 @@ def submit_student_assignment():
     """HOD submits student assignments to staff members"""
     if not is_department_admin(current_user):
         abort(403)
-    
-    form = StudentStaffAssignmentForm(current_user.department)
+
+    department_name = get_active_department(current_user)
+    form = StudentStaffAssignmentForm(department_name)
     
     if form.validate_on_submit():
         staff_id = form.staff_member.data
         student_ids = form.students.data
         notes = form.notes.data
         
-        staff = User.query.filter_by(id=staff_id, department=current_user.department, role='staff').first()
+        staff = User.query.filter_by(id=staff_id, department=department_name, role='staff').first()
         if not staff:
             flash('Selected staff member not found or not in your department', 'danger')
             return redirect(url_for('assign_students'))
         
         try:
-            assigned_student_ids = get_assigned_student_ids(current_user.department)
+            assigned_student_ids = get_assigned_student_ids(department_name)
             created_assignments = 0
             skipped_students = []
 
             # Add assignments
             for student_id in student_ids:
-                student = User.query.filter_by(id=student_id, department=current_user.department, role='student').first()
+                student = User.query.filter_by(id=student_id, department=department_name, role='student').first()
                 if not student:
                     continue
 
@@ -2628,7 +3187,7 @@ def submit_student_assignment():
 
                 existing = StudentStaffAssignment.query.filter_by(
                     student_id=student.id,
-                    department=current_user.department
+                    department=department_name
                 ).first()
 
                 if existing:
@@ -2638,7 +3197,7 @@ def submit_student_assignment():
                 assignment = StudentStaffAssignment(
                     student_id=student.id,
                     staff_id=staff_id,
-                    department=current_user.department,
+                    department=department_name,
                     notes=notes
                 )
                 db.session.add(assignment)
@@ -2753,6 +3312,33 @@ def super_admin_users():
     staff = [u for u in all_users if u.role in ('staff', 'mentor')]
     others = [u for u in all_users if u.role not in ('student', 'staff', 'mentor')]
 
+    # These users are being shown because their home department matches the
+    # current filter — the department to display for them is just their own.
+    for u in others:
+        u.display_department = u.department
+        u.is_additional_department = False
+
+    # A HOD's home department (User.department) can differ from a department
+    # they've been granted additional access to via HODDepartment (multi-department
+    # HOD support). Surface those HODs in the Admin/HOD tab too, so this page
+    # matches what Manage Departments shows as the assigned HOD for this department.
+    # For these, show the FILTERED department (why they're in this list), not
+    # their home department, and flag them so the template can label it clearly.
+    if department_filter:
+        filter_dept = Department.query.filter_by(name=department_filter).first()
+        if filter_dept:
+            linked_hod_ids = {
+                link.user_id for link in HODDepartment.query.filter_by(department_id=filter_dept.id).all()
+            }
+            already_included_ids = {u.id for u in others}
+            extra_hod_ids = linked_hod_ids - already_included_ids
+            if extra_hod_ids:
+                extra_hods = User.query.filter(User.id.in_(extra_hod_ids), User.role == 'hod').all()
+                for hod in extra_hods:
+                    hod.display_department = department_filter
+                    hod.is_additional_department = True
+                others.extend(extra_hods)
+
     complaint_counts = dict(
         db.session.query(Complaint.user_id, func.count(Complaint.id))
         .group_by(Complaint.user_id)
@@ -2776,6 +3362,64 @@ def super_admin_users():
         section_filter=section_filter
     )
 
+@app.route('/admin/manage-users')
+@login_required
+def manage_all_users():
+    """Simple flat list of every user in the system (super admin only).
+    Complements super_admin_users (which is grouped/filterable by department)
+    with a single unfiltered table view."""
+    if not is_super_admin(current_user):
+        abort(403)
+
+    users = User.query.order_by(User.id).all()
+    return render_template('manage_users.html', users=users)
+
+
+@app.route('/admin/user/<int:user_id>/hod-departments', methods=['GET', 'POST'])
+@login_required
+def manage_hod_departments(user_id):
+    """Super admin controls which departments a HOD has access to (beyond
+    the single 'official' hod_id shown on Manage Departments). This is what
+    lets one person manage multiple departments with a single login."""
+    if not is_super_admin(current_user):
+        abort(403)
+
+    hod_user = User.query.get_or_404(user_id)
+    if hod_user.role != 'hod':
+        flash('Only HOD accounts can be given department access. Change this user\'s role to HOD first.', 'danger')
+        return redirect(url_for('manage_all_users'))
+
+    all_departments = Department.query.order_by(Department.name).all()
+
+    if request.method == 'POST':
+        selected_ids = {int(i) for i in request.form.getlist('department_ids') if i.isdigit()}
+        current_links = HODDepartment.query.filter_by(user_id=hod_user.id).all()
+        current_ids = {link.department_id for link in current_links}
+
+        # Remove access that was unchecked
+        for link in current_links:
+            if link.department_id not in selected_ids:
+                db.session.delete(link)
+
+        # Add access that was newly checked
+        for dept_id in selected_ids - current_ids:
+            db.session.add(HODDepartment(user_id=hod_user.id, department_id=dept_id))
+
+        db.session.commit()
+        flash(f'Department access updated for "{hod_user.username}".', 'success')
+        return redirect(url_for('manage_hod_departments', user_id=hod_user.id))
+
+    current_dept_ids = {
+        link.department_id for link in HODDepartment.query.filter_by(user_id=hod_user.id).all()
+    }
+    return render_template(
+        'manage_hod_departments.html',
+        hod_user=hod_user,
+        all_departments=all_departments,
+        current_dept_ids=current_dept_ids
+    )
+
+
 @app.route('/admin/user/<int:user_id>/change-role/<string:role>')
 @login_required
 def super_admin_change_user_role(user_id, role):
@@ -2790,6 +3434,23 @@ def super_admin_change_user_role(user_id, role):
     if role not in ['student', 'staff', 'hod']:
         flash('Invalid role specified!', 'danger')
         return redirect(url_for('super_admin_users'))
+
+    dept = Department.query.filter_by(name=user.department).first()
+
+    if role == 'hod':
+        # Only one HOD per department: demote whoever currently holds it (if anyone).
+        if dept and dept.hod_id and dept.hod_id != user.id:
+            existing_hod = User.query.get(dept.hod_id)
+            if existing_hod:
+                existing_hod.role = 'staff'
+                flash(f'"{existing_hod.username}" was demoted from HOD to Staff.', 'info')
+        if dept:
+            dept.hod_id = user.id
+    else:
+        # If this user was their department's HOD and is being moved to another
+        # role, clear the department's hod_id so it doesn't point at a non-HOD user.
+        if dept and dept.hod_id == user.id:
+            dept.hod_id = None
     
     old_role = user.role
     user.role = role
@@ -2856,11 +3517,19 @@ def add_department():
     
     form = DepartmentForm()
     if form.validate_on_submit():
+        chosen_hod_id = form.hod_id.data if form.hod_id.data != 0 else None
+
         department = Department(
             name=form.name.data,
-            hod_id=form.hod_id.data if form.hod_id.data != 0 else None
+            hod_id=chosen_hod_id
         )
         db.session.add(department)
+
+        if chosen_hod_id:
+            chosen_hod = User.query.get(chosen_hod_id)
+            if chosen_hod:
+                chosen_hod.role = 'hod'
+
         db.session.commit()
         flash(f'Department "{form.name.data}" added successfully!', 'success')
         return redirect(url_for('manage_departments'))
@@ -2875,11 +3544,25 @@ def edit_department(dept_id):
         abort(403)
     
     department = Department.query.get_or_404(dept_id)
-    form = DepartmentForm()
+    form = DepartmentForm(current_hod_id=department.hod_id)
     
     if form.validate_on_submit():
+        new_hod_id = form.hod_id.data if form.hod_id.data != 0 else None
+        old_hod_id = department.hod_id
+
         department.name = form.name.data
-        department.hod_id = form.hod_id.data if form.hod_id.data != 0 else None
+        department.hod_id = new_hod_id
+
+        if old_hod_id and old_hod_id != new_hod_id:
+            old_hod = User.query.get(old_hod_id)
+            if old_hod:
+                old_hod.role = 'staff'
+
+        if new_hod_id:
+            new_hod = User.query.get(new_hod_id)
+            if new_hod:
+                new_hod.role = 'hod'
+
         db.session.commit()
         flash(f'Department updated successfully!', 'success')
         return redirect(url_for('manage_departments'))
@@ -2889,6 +3572,54 @@ def edit_department(dept_id):
         form.hod_id.data = department.hod_id
     
     return render_template('edit_department.html', form=form, department=department)
+
+@app.route('/admin/hods/upload', methods=['GET', 'POST'])
+@login_required
+def upload_hods_csv():
+    """Super admin bulk-uploads HODs via CSV. If an email already belongs to
+    an existing HOD, that department is linked to their account instead of
+    creating a duplicate — this is how one person ends up managing multiple
+    departments with a single login."""
+    if not is_super_admin(current_user):
+        abort(403)
+
+    if request.method == 'GET':
+        departments = Department.query.order_by(Department.name).all()
+        return render_template('upload_hods_csv.html', departments=departments)
+
+    file = request.files.get('csv_file')
+    if not file or file.filename == '':
+        flash('Please choose a CSV file to upload.', 'danger')
+        return redirect(url_for('upload_hods_csv'))
+
+    if not file.filename.lower().endswith('.csv'):
+        flash('Only .csv files are supported.', 'danger')
+        return redirect(url_for('upload_hods_csv'))
+
+    try:
+        rows, fieldnames = _parse_csv_stream(file)
+    except Exception as e:
+        flash(f'Could not read the CSV file: {e}', 'danger')
+        return redirect(url_for('upload_hods_csv'))
+
+    if not rows:
+        flash('The CSV file appears to be empty.', 'danger')
+        return redirect(url_for('upload_hods_csv'))
+
+    result = _import_hods(rows, DEFAULT_IMPORT_PASSWORD)
+
+    if result['created']:
+        flash(f"Created {len(result['created'])} new HOD account(s).", 'success')
+    if result['linked']:
+        flash(f"Granted {len(result['linked'])} additional department(s) to existing HOD(s).", 'success')
+    if result['skipped']:
+        flash(f"{len(result['skipped'])} row(s) skipped.", 'warning')
+    if result['errors']:
+        flash(f"{len(result['errors'])} row(s) had errors.", 'danger')
+
+    departments = Department.query.order_by(Department.name).all()
+    return render_template('upload_hods_csv.html', departments=departments, result=result)
+
 
 @app.route('/admin/department/<int:id>/delete', methods=['POST'])
 @login_required
@@ -2929,10 +3660,11 @@ def analytics_board():
         base_query = Complaint.query
         scope_label = 'All Departments'
     else:
+        active_department = get_active_department(current_user)
         base_query = Complaint.query.join(User, Complaint.user_id == User.id).filter(
-            User.department == current_user.department
+            User.department == active_department
         )
-        scope_label = current_user.department
+        scope_label = active_department
 
     category_totals = []
     status_breakdown = {status: [] for status in statuses}
@@ -3125,6 +3857,45 @@ def reset_password(email):
 
 # ========== TEMPORARY FIX ROUTES ==========
 
+@app.route('/fix-hod-roles')
+@login_required
+def fix_hod_roles():
+    """One-time data fix: some departments' hod_id was set (via the old
+    add/edit department form) without ever updating that user's role to
+    'hod', so Manage Departments and Manage Users disagreed on who's HOD.
+    This walks every department and corrects it. Safe to run repeatedly."""
+    if not is_super_admin(current_user):
+        return "Only admin can access this", 403
+
+    try:
+        departments = Department.query.filter(Department.hod_id.isnot(None)).all()
+        fixed = []
+
+        for dept in departments:
+            hod_user = User.query.get(dept.hod_id)
+            if hod_user and hod_user.role != 'hod':
+                old_role = hod_user.role
+                hod_user.role = 'hod'
+                fixed.append(f"{hod_user.username} ({dept.name}): {old_role} → hod")
+
+        db.session.commit()
+
+        result = "<html><body><h2>Fixing HOD Roles...</h2>"
+        if fixed:
+            result += f"<p>Corrected {len(fixed)} user(s):</p><ul>"
+            for line in fixed:
+                result += f"<li>{line}</li>"
+            result += "</ul>"
+        else:
+            result += "<p>No mismatches found — everything is already in sync.</p>"
+        result += "<h2 style='color:green'>✅ Done!</h2>"
+        result += "<a href='/admin/manage-users'>Go to Manage Users</a> | <a href='/admin/departments'>Go to Manage Departments</a></body></html>"
+        return result
+    except Exception as e:
+        db.session.rollback()
+        return f"<h2 style='color:red'>Error: {str(e)}</h2>"
+
+
 @app.route('/fix-complaint-ids')
 @login_required
 def fix_complaint_ids():
@@ -3208,8 +3979,7 @@ def api_complaint_analytics():
     department = None
 
     if is_department_admin(current_user) and not is_super_admin(current_user):
-        hod_dept = get_hod_department(current_user.id)
-        department = hod_dept.name if hod_dept else current_user.department
+        department = get_active_department(current_user)
     elif is_super_admin(current_user):
         department = request.args.get('department') or None
 
@@ -3248,6 +4018,64 @@ def api_complaint_analytics():
     total = len(complaints)
     resolved = by_status.get('resolved', 0)
     resolution_rate = round((resolved / total * 100) if total else 0, 1)
+
+    # ----- Operational health metrics -----
+    overdue_count = sum(1 for c in complaints if c.is_overdue)
+    escalated_count = sum(1 for c in complaints if c.escalation_level and c.escalation_level > 0)
+    duplicate_merged_count = sum(1 for c in complaints if c.is_duplicate_of is not None)
+
+    resolved_complaints_list = [c for c in complaints if c.status == 'resolved']
+    if resolved_complaints_list:
+        total_hours = sum(
+            (c.updated_at - c.created_at).total_seconds() / 3600
+            for c in resolved_complaints_list
+        )
+        avg_resolution_hours = round(total_hours / len(resolved_complaints_list), 1)
+    else:
+        avg_resolution_hours = 0
+
+    complaints_with_deadline_resolved = [c for c in resolved_complaints_list if c.deadline]
+    if complaints_with_deadline_resolved:
+        met_sla = sum(1 for c in complaints_with_deadline_resolved if c.updated_at <= c.deadline)
+        sla_compliance_rate = round((met_sla / len(complaints_with_deadline_resolved)) * 100, 1)
+    else:
+        sla_compliance_rate = None  # no resolved complaints with a deadline yet to judge SLA against
+        # ----- Urgent attention: open high-priority complaints, oldest first -----
+    urgent_query = base_query.filter(
+        Complaint.priority == 'high',
+        Complaint.status.in_(['pending', 'in_progress'])
+    ).order_by(Complaint.created_at.asc()).limit(10)
+
+    urgent_complaints = []
+    for c in urgent_query.all():
+        urgent_complaints.append({
+            'id': c.id,
+            'complaint_id': c.complaint_id,
+            'title': c.title,
+            'department': c.author.department if c.author else 'Unknown',
+            'status': c.status,
+            'created_at': c.created_at.strftime('%d-%m-%Y'),
+            'is_overdue': bool(c.is_overdue)
+        })
+
+    # ----- Trend vs previous period of the same length -----
+   
+    compare_days = days or 30
+    current_period_start = datetime.utcnow() - timedelta(days=compare_days)
+    previous_period_start = current_period_start - timedelta(days=compare_days)
+
+    current_period_count = base_query.filter(Complaint.created_at >= current_period_start).count()
+    previous_period_count = base_query.filter(
+        Complaint.created_at >= previous_period_start,
+        Complaint.created_at < current_period_start
+    ).count()
+
+    if previous_period_count > 0:
+        trend_change_pct = round(((current_period_count - previous_period_count) / previous_period_count) * 100, 1)
+    elif current_period_count > 0:
+        trend_change_pct = 100.0
+    else:
+        trend_change_pct = 0.0
 
     # Per-category pending count and resolution rate, for insights
     per_cat_pending = {}
@@ -3326,7 +4154,16 @@ def api_complaint_analytics():
         'monthly_trend_labels': month_labels,
         'monthly_trend_values': monthly_trend,
         'insights': insights,
-        'scope': ' - '.join(scope_parts)
+        'scope': department or 'All Departments',
+        'overdue_count': overdue_count,
+        'escalated_count': escalated_count,
+        'duplicate_merged_count': duplicate_merged_count,
+        'avg_resolution_hours': avg_resolution_hours,
+        'sla_compliance_rate': sla_compliance_rate,
+        'trend_change_pct': trend_change_pct,
+        'current_period_count': current_period_count,
+        'previous_period_count': previous_period_count,
+        'urgent_complaints': urgent_complaints,
     })
 
 
@@ -3370,7 +4207,42 @@ def get_duplicate_count(complaint):
     """How many other complaints were merged into this one."""
     return Complaint.query.filter_by(is_duplicate_of=complaint.id).count()
 
+@app.route('/api/analytics/staff-performance')
+@login_required
+def api_staff_performance():
+    """Top staff/mentors ranked by resolved complaints, scoped to the caller's
+    department (HOD) or a selected/all departments (super admin)."""
+    if not (is_super_admin(current_user) or is_department_admin(current_user)):
+        abort(403)
 
+    department = None
+    if is_department_admin(current_user) and not is_super_admin(current_user):
+        department = get_active_department(current_user)
+    elif is_super_admin(current_user):
+        department = request.args.get('department') or None
+
+    staff_query = User.query.filter(User.role.in_(['staff', 'mentor']))
+    if department:
+        staff_query = staff_query.filter(User.department == department)
+
+    result = []
+    for staff in staff_query.all():
+        assigned = Complaint.query.filter(
+            (Complaint.assigned_to == staff.id) | (Complaint.mentor_id == staff.id)
+        ).all()
+        if not assigned:
+            continue
+        resolved = [c for c in assigned if c.status == 'resolved']
+        result.append({
+            'name': staff.username,
+            'department': staff.department,
+            'assigned': len(assigned),
+            'resolved': len(resolved),
+            'resolution_rate': round((len(resolved) / len(assigned)) * 100, 1)
+        })
+
+    result.sort(key=lambda r: r['resolved'], reverse=True)
+    return jsonify(result[:10])
 @app.context_processor
 def utility_processor():
     return {
@@ -3379,6 +4251,8 @@ def utility_processor():
         'can_manage_user': can_manage_user,
         'get_merge_original': get_merge_original,
         'get_duplicate_count': get_duplicate_count,
+        'get_hod_departments': get_hod_departments,
+        'get_active_department': get_active_department,
     }
 
 
