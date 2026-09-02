@@ -116,12 +116,18 @@ class Profiles(db.Model):
     """Optional profiles table that mirrors Supabase auth.users via UUID primary key.
 
     Fields:
-    - id: UUID primary key that references auth.users(id)
+    - id: UUID primary key (intended to correspond to auth.users(id) in Supabase,
+      but NOT declared as a DB-level ForeignKey here — SQLAlchemy doesn't manage
+      Supabase's internal `auth` schema, so a FK to 'auth.users.id' is
+      unresolvable and previously made db.create_all() fail for EVERY table,
+      not just this one, since table creation is ordered by FK dependency.
+      If you need this enforced at the database level, add it manually via a
+      raw SQL migration in Supabase instead of through this model.)
     - updated_at: timestamp with timezone
     - username: text unique with CHECK(char_length(username) >= 3)
     - full_name, avatar_url, website
     """
-    id = db.Column(UUID(as_uuid=True), db.ForeignKey('auth.users.id'), primary_key=True, default=uuid.uuid4)
+    id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     updated_at = db.Column(db.DateTime(timezone=True), default=func.now(), onupdate=func.now())
     username = db.Column(db.Text, unique=True, nullable=True)
     full_name = db.Column(db.Text, nullable=True)

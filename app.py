@@ -76,6 +76,16 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "pool_pre_ping": True,
     "pool_recycle": 280,
 }
+# Postgres-only connection tuning: fail fast instead of hanging forever if the
+# Supabase pooler is unreachable, and skip psycopg2's extra hstore-support
+# probe (this app doesn't use hstore). connect_timeout bounds the initial
+# handshake; statement_timeout bounds any individual query afterwards.
+if parsed_db.scheme in ('postgresql', 'postgres'):
+    app.config['SQLALCHEMY_ENGINE_OPTIONS']['connect_args'] = {
+        "connect_timeout": 10,
+        "options": "-c search_path=public -c statement_timeout=15000",
+    }
+    app.config['SQLALCHEMY_ENGINE_OPTIONS']['use_native_hstore'] = False
 # Initialize extensions
 db.init_app(app)
 login_manager.init_app(app)
@@ -624,8 +634,18 @@ def initialize_database():
                 app.logger.exception('db.create_all failed; continuing with best-effort schema fixes')
 
             # Ensure legacy SQLite databases get the missing mentor_id column
-            inspector = inspect(db.engine)
-            if 'complaint' in inspector.get_table_names():
+            try:
+                inspector = inspect(db.engine)
+                table_names = inspector.get_table_names()
+            except Exception:
+                app.logger.exception(
+                    'Could not connect to the database to inspect its schema. '
+                    'The app will continue starting, but pages that need the '
+                    'database will fail until this is resolved.'
+                )
+                return
+
+            if 'complaint' in table_names:
                 complaint_columns = [column['name'] for column in inspector.get_columns('complaint')]
                 if 'mentor_id' not in complaint_columns:
                     try:
@@ -1200,6 +1220,23 @@ def mentor_students():
         
         grouped_assigned_students[year_section].append(student_data)
     
+     # Sort each group's students by roll number (not just the group keys)
+    import re
+
+    def roll_number_sort_key(student_data):
+        roll = student_data['user'].roll_number
+        if not roll:
+            return (1, 0, '')
+        match = re.search(r'(\d+)$', roll)
+        if match:
+            return (0, int(match.group(1)), roll)
+        return (0, 0, roll)
+
+    for year_section in grouped_students:
+        grouped_students[year_section].sort(key=roll_number_sort_key)
+    for year_section in grouped_assigned_students:
+        grouped_assigned_students[year_section].sort(key=roll_number_sort_key)
+
     # Sort the groups
     grouped_students = dict(sorted(grouped_students.items()))
     grouped_assigned_students = dict(sorted(grouped_assigned_students.items()))
@@ -2338,7 +2375,52 @@ def api_update_status(complaint_id):
     notify_merged_duplicate_authors(complaint, old_status) 
     return jsonify({'success': True})
 
+@app.route('/duplicates')
+@login_required
+def review_duplicates():
+    """Human review queue for complaints the automation flagged as possible
+    duplicates. Nothing is ever auto-merged — a person confirms or dismisses
+    each one here."""
+    if current_user.role == 'student':
+        abort(403)
 
+    accessible = get_user_accessible_complaints(current_user)
+    accessible_ids = {c.id for c in accessible}
+
+    pending_review = Complaint.query.filter(
+        Complaint.is_possible_duplicate.is_(True),
+        Complaint.duplicate_reviewed.is_(False),
+    ).all()
+    pending_review = [c for c in pending_review if c.id in accessible_ids]
+
+    return render_template('review_duplicates.html', pairs=pending_review)
+
+
+@app.route('/duplicates/<int:complaint_id>/confirm', methods=['POST'])
+@login_required
+def confirm_duplicate(complaint_id):
+    if current_user.role == 'student':
+        abort(403)
+    complaint = Complaint.query.get_or_404(complaint_id)
+    complaint.duplicate_reviewed = True
+    complaint.status = 'rejected'
+    note = f"Marked as duplicate of {complaint.duplicate_of.complaint_id if complaint.duplicate_of else 'another complaint'} by {current_user.username}."
+    complaint.action_taken = (complaint.action_taken + '\n' + note) if complaint.action_taken else note
+    db.session.commit()
+    flash(f'{complaint.complaint_id} marked as a duplicate and closed.', 'success')
+    return redirect(url_for('review_duplicates'))
+
+
+@app.route('/duplicates/<int:complaint_id>/dismiss', methods=['POST'])
+@login_required
+def dismiss_duplicate(complaint_id):
+    if current_user.role == 'student':
+        abort(403)
+    complaint = Complaint.query.get_or_404(complaint_id)
+    complaint.duplicate_reviewed = True
+    db.session.commit()
+    flash(f'{complaint.complaint_id} dismissed as not a duplicate.', 'info')
+    return redirect(url_for('review_duplicates'))
 # ========== USER MANAGEMENT ROUTES ==========
 
 @app.route('/department/users')
@@ -3267,6 +3349,64 @@ def remove_student_assignment(assignment_id):
         return redirect(url_for('dashboard'))
 
 
+@app.route('/remove-student-assignments/bulk', methods=['POST'])
+@login_required
+def remove_student_assignments_bulk():
+    """Remove multiple student assignments at once (checkbox-selected),
+    instead of one-by-one. Same permission rules as the single-remove route,
+    applied per assignment — any assignment the caller isn't allowed to touch
+    is silently skipped rather than aborting the whole batch."""
+    assignment_ids = request.form.getlist('assignment_ids')
+    id_list = [int(i) for i in assignment_ids if i.isdigit()]
+
+    if not id_list:
+        flash('No students were selected to remove.', 'warning')
+    else:
+        assignments = StudentStaffAssignment.query.filter(StudentStaffAssignment.id.in_(id_list)).all()
+
+        removed_count = 0
+        skipped_count = 0
+
+        for assignment in assignments:
+            allowed = False
+            if is_super_admin(current_user):
+                allowed = True
+            elif is_department_admin(current_user):
+                allowed = assignment.department in {d.name for d in get_hod_departments(current_user)}
+            elif current_user.role in ['staff', 'mentor']:
+                allowed = assignment.staff_id == current_user.id
+
+            if not allowed:
+                skipped_count += 1
+                continue
+
+            try:
+                db.session.delete(assignment)
+                removed_count += 1
+            except Exception:
+                skipped_count += 1
+
+        try:
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Error removing assignments: {str(e)}', 'danger')
+            removed_count = 0
+
+        if removed_count:
+            flash(f'Successfully removed {removed_count} student assignment(s).', 'success')
+        if skipped_count:
+            flash(f'{skipped_count} assignment(s) were skipped (not permitted or not found).', 'warning')
+
+    # Redirect based on user role
+    if is_department_admin(current_user):
+        return redirect(url_for('assign_students'))
+    elif current_user.role in ['staff', 'mentor']:
+        return redirect(url_for('mentor_students'))
+    else:
+        return redirect(url_for('dashboard'))
+
+
 # ========== SUPER ADMIN USER MANAGEMENT ==========
 
 @app.route('/admin/users')
@@ -3896,37 +4036,53 @@ def fix_hod_roles():
         return f"<h2 style='color:red'>Error: {str(e)}</h2>"
 
 
-@app.route('/fix-complaint-ids')
+@app.route('/fix-complaint-ids-randomize')
 @login_required
-def fix_complaint_ids():
+def fix_complaint_ids_randomize():
+    """One-time migration: reassigns every EXISTING complaint a random,
+    non-sequential ID (see generate_complaint_id() in utils.py), so old
+    complaints stop leaking the total complaint count. Safe to run more
+    than once."""
     if not is_super_admin(current_user):
         return "Only admin can access this", 403
-    
+
     try:
-        from sqlalchemy import text
         complaints = Complaint.query.order_by(Complaint.created_at).all()
-        result = "<html><body><h2>Fixing Complaint IDs...</h2>"
+        result = "<html><body><h2>Randomizing Complaint IDs...</h2>"
         result += f"<p>Found {len(complaints)} complaints</p>"
         fixed_count = 0
-        
-        for idx, complaint in enumerate(complaints, start=1):
+
+        for complaint in complaints:
             old_id = complaint.complaint_id
-            new_id = f'ESEC{idx:02d}'
+            new_id = generate_complaint_id()
             if old_id != new_id:
-                db.session.execute(
-                    text('UPDATE complaint SET complaint_id = :new_id WHERE id = :comp_id'),
-                    {'new_id': new_id, 'comp_id': complaint.id}
-                )
+                complaint.complaint_id = new_id
                 result += f"<p>Changed: {old_id} → {new_id}</p>"
                 fixed_count += 1
-        
+
         db.session.commit()
-        result += f"<h2 style='color:green'>✅ Fixed {fixed_count} complaints!</h2>"
+        result += f"<h2 style='color:green'>✅ Randomized {fixed_count} complaint ID(s)!</h2>"
         result += "<a href='/complaints'>Go to My Complaints</a></body></html>"
         return result
     except Exception as e:
         db.session.rollback()
         return f"<h2 style='color:red'>Error: {str(e)}</h2>"
+
+
+@app.route('/fix-complaint-ids')
+@login_required
+def fix_complaint_ids():
+    """DISABLED: reverts complaint IDs back to sequential ESEC01/ESEC02/...
+    form, which leaks the total complaint count. Use
+    /fix-complaint-ids-randomize instead."""
+    if not is_super_admin(current_user):
+        return "Only admin can access this", 403
+    return (
+        "<html><body><h2>This tool has been disabled</h2>"
+        "<p>Sequential IDs leak the total complaint count. Use "
+        "<a href='/fix-complaint-ids-randomize'>/fix-complaint-ids-randomize</a> instead.</p>"
+        "</body></html>"
+    )
 
 
 @app.route('/test')

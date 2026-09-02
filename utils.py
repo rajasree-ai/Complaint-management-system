@@ -18,26 +18,26 @@ def utc_to_local(utc_dt):
 
 
 def generate_complaint_id():
-    """Generate sequential complaint ID in format ESEC01, ESEC02, etc."""
+    """Generate a complaint ID that does NOT reveal the total complaint count.
+    Format: ESEC-<year>-<5 random uppercase alphanumeric chars>, e.g. ESEC-26-8K3F2.
+    A sequential ESEC01/ESEC02/... scheme lets anyone infer the system-wide
+    total just from their own ID, which students should never be able to see.
+    Retries on the rare collision instead of ever falling back to a counter."""
     from models import Complaint
-    
-    latest_complaint = Complaint.query.order_by(Complaint.id.desc()).first()
-    
-    if latest_complaint and latest_complaint.complaint_id:
-        match = re.search(r'ESEC(\d+)', latest_complaint.complaint_id)
-        if match:
-            last_number = int(match.group(1))
-            new_number = last_number + 1
-        else:
-            new_number = 1
-    else:
-        new_number = 1
-    
-    if new_number <= 99:
-        return f'ESEC{new_number:02d}'
-    else:
-        return f'ESEC{new_number:03d}'
 
+    # Avoid visually ambiguous characters (0/O, 1/I/L) for readability.
+    alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+    year = datetime.utcnow().strftime('%y')
+
+    for _ in range(20):  # extremely unlikely to ever need more than 1 try
+        suffix = ''.join(secrets.choice(alphabet) for _ in range(5))
+        candidate = f'ESEC-{year}-{suffix}'
+        if not Complaint.query.filter_by(complaint_id=candidate).first():
+            return candidate
+
+    # Fallback in the astronomically unlikely case of 20 collisions in a row.
+    suffix = ''.join(secrets.choice(alphabet) for _ in range(8))
+    return f'ESEC-{year}-{suffix}'
 
 def send_email_notification(recipient_email, subject, body, mail=None):
     """Send email notification"""
