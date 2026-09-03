@@ -325,16 +325,7 @@
                             </li>
                         {% endif %}
                         
-                        <!-- ========== NOTIFICATIONS ========== -->
-                        <li class="nav-item position-relative">
-                            <a class="nav-link" href="{{ url_for('view_notifications') }}">
-                                <i class="fas fa-bell me-1"></i> Notifications
-                                {% set unread = current_user.notifications|selectattr('is_read', 'equalto', false)|list|length %}
-                                {% if unread > 0 %}
-                                    <span class="badge bg-danger">{{ unread }}</span>
-                                {% endif %}
-                            </a>
-                        </li>
+
                         
                         <!-- ========== STAFF/MENTOR SPECIFIC LINKS ========== -->
                         {% if current_user.role == 'staff' %}

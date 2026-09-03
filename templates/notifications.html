@@ -1,6 +1,48 @@
 {% extends "base.html" %}
 
 {% block content %}
+<div class="row mb-3">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <h4 class="mb-0">
+                <i class="fas fa-bell me-2"></i>Notifications
+            </h4>
+            {% if notifications %}
+            <form method="POST" action="{{ url_for('delete_all_notifications', category=category_filter) }}"
+                  onsubmit="return confirm('Delete all {{ 'in this category' if category_filter else '' }} notifications? This cannot be undone.');">
+                <button type="submit" class="btn btn-outline-danger btn-sm">
+                    <i class="fas fa-trash-alt me-1"></i> Delete All
+                </button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="row mb-3">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body py-2">
+                <form method="GET" class="row g-2 align-items-center">
+                    <div class="col-auto">
+                        <label class="col-form-label"><i class="fas fa-filter me-1"></i>Category:</label>
+                    </div>
+                    <div class="col-auto">
+                        <select name="category" class="form-select form-select-sm" onchange="this.form.submit()">
+                            <option value="">All Categories</option>
+                            {% for cat_value, cat_label in categories %}
+                            <option value="{{ cat_value }}" {% if category_filter == cat_value %}selected{% endif %}>
+                                {{ cat_label }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="row">
     <div class="col-12">
         <div class="card">
@@ -25,16 +67,21 @@
                                         {% endif %}
                                         {{ notification.message }}
                                     </h6>
-                                    <small class="text-muted">{{ notification.created_at.strftime('%d-%m-%Y %H:%M') }}</small>
+                                    <div class="d-flex align-items-center">
+                                        <small class="text-muted me-2">{{ notification.created_at.strftime('%d-%m-%Y %H:%M') }}</small>
+                                        <form method="POST" action="{{ url_for('delete_notification', notification_id=notification.id) }}?category={{ category_filter }}"
+                                              onsubmit="return confirm('Delete this notification?');">
+                                            <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete">
+                                                <i class="fas fa-times"></i>
+                                            </button>
+                                        </form>
+                                    </div>
                                 </div>
+                                 {% if not notification.is_read %}
                                 <p class="mb-1">
-                                    <small>
-                                        Type: {{ notification.type }}
-                                        {% if not notification.is_read %}
-                                            <span class="badge bg-primary ms-2">New</span>
-                                        {% endif %}
-                                    </small>
+                                    <span class="badge bg-primary">New</span>
                                 </p>
+                                {% endif %}
                                 
                                 <!-- Only show View Complaint button if complaint_id exists and is not 0 -->
                                 {% if notification.complaint_id and notification.complaint_id != 0 %}
@@ -58,7 +105,13 @@
                     <div class="text-center py-5">
                         <i class="fas fa-bell-slash fa-4x text-muted mb-3"></i>
                         <h5>No Notifications</h5>
-                        <p class="text-muted">You don't have any notifications at the moment.</p>
+                        <p class="text-muted">
+                            {% if category_filter %}
+                                No notifications in this category.
+                            {% else %}
+                                You don't have any notifications at the moment.
+                            {% endif %}
+                        </p>
                     </div>
                 {% endif %}
             </div>

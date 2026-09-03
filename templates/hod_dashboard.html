@@ -16,11 +16,14 @@
                         <p class="mb-0 opacity-75">Welcome back, <strong>{{ current_user.username }}</strong> &middot; Head of Department</p>
                     </div>
                 </div>
-                {% if notifications and notifications > 0 %}
-                <a href="{{ url_for('view_notifications') }}" class="btn btn-light btn-sm">
-                    <i class="fas fa-bell me-1"></i> {{ notifications }} new notification{{ 's' if notifications != 1 else '' }}
+                <a href="{{ url_for('view_notifications') }}" class="btn btn-light btn-sm position-relative" style="z-index: 10;">
+                    <i class="fas fa-bell"></i>
+                    {% if notifications and notifications > 0 %}
+                        <span class="badge bg-danger position-absolute top-0 start-100 translate-middle rounded-pill">
+                            {{ notifications }}
+                        </span>
+                    {% endif %}
                 </a>
-                {% endif %}
             </div>
 
             {% set hod_depts = get_hod_departments(current_user) %}

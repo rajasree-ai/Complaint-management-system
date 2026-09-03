@@ -18,16 +18,48 @@
     </div>
 </div>
 
-<!-- Column Picker Modal -->
+        <!-- Column Picker Modal -->
 <div class="modal fade" id="studentColumnsModal" tabindex="-1" aria-labelledby="studentColumnsModalLabel" aria-hidden="true">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header bg-primary text-white">
-                <h5 class="modal-title" id="studentColumnsModalLabel"><i class="fas fa-list-check me-2"></i>Choose Export Columns</h5>
+                <h5 class="modal-title" id="studentColumnsModalLabel"><i class="fas fa-list-check me-2"></i>Choose Export Options</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <p class="text-muted small">Pick which details to include, then export.</p>
+                <p class="text-muted small">Pick which details, years, and sections to include, then export.</p>
+
+                {% if years %}
+                <h6 class="fw-bold">Filter by Year</h6>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="yearSelectAll" checked onclick="toggleAllYearFilters(this)">
+                    <label class="form-check-label" for="yearSelectAll">All Years</label>
+                </div>
+                {% for yr in years %}
+                <div class="form-check">
+                    <input class="form-check-input year-filter-checkbox" type="checkbox" value="{{ yr }}" id="yearFilter_{{ loop.index }}" checked>
+                    <label class="form-check-label" for="yearFilter_{{ loop.index }}">{{ yr }}</label>
+                </div>
+                {% endfor %}
+                <hr>
+                {% endif %}
+
+                {% if sections %}
+                <h6 class="fw-bold">Filter by Section</h6>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="sectionSelectAll" checked onclick="toggleAllSectionFilters(this)">
+                    <label class="form-check-label" for="sectionSelectAll">All Sections</label>
+                </div>
+                {% for sec in sections %}
+                <div class="form-check">
+                    <input class="form-check-input section-filter-checkbox" type="checkbox" value="{{ sec }}" id="sectionFilter_{{ loop.index }}" checked>
+                    <label class="form-check-label" for="sectionFilter_{{ loop.index }}">Section {{ sec }}</label>
+                </div>
+                {% endfor %}
+                <hr>
+                {% endif %}
+
+                <h6 class="fw-bold">Columns</h6>
                 <div class="form-check">
                     <input class="form-check-input" type="checkbox" id="studentColSelectAll" checked onclick="toggleAllStudentColumns(this)">
                     <label class="form-check-label fw-bold" for="studentColSelectAll">Select All</label>
@@ -168,12 +200,36 @@ function toggleAllStudentColumns(source) {
     document.querySelectorAll('.student-col-checkbox').forEach(cb => cb.checked = source.checked);
 }
 
+function toggleAllYearFilters(source) {
+    document.querySelectorAll('.year-filter-checkbox').forEach(cb => cb.checked = source.checked);
+}
+
+function toggleAllSectionFilters(source) {
+    document.querySelectorAll('.section-filter-checkbox').forEach(cb => cb.checked = source.checked);
+}
+
 function exportStudentsWithColumns(format) {
     const columns = Array.from(document.querySelectorAll('.student-col-checkbox:checked')).map(cb => cb.value);
+
+    const allYearBoxes = document.querySelectorAll('.year-filter-checkbox');
+    const checkedYears = Array.from(document.querySelectorAll('.year-filter-checkbox:checked')).map(cb => cb.value);
+
+    const allSectionBoxes = document.querySelectorAll('.section-filter-checkbox');
+    const checkedSections = Array.from(document.querySelectorAll('.section-filter-checkbox:checked')).map(cb => cb.value);
+
     const params = new URLSearchParams();
     if (columns.length) {
         params.set('columns', columns.join(','));
     }
+    // Only send years/sections if it's a PARTIAL selection (not all checked) —
+    // matches "no filter" behavior when everything is checked, same as before.
+    if (allYearBoxes.length && checkedYears.length < allYearBoxes.length) {
+        params.set('years', checkedYears.join(','));
+    }
+    if (allSectionBoxes.length && checkedSections.length < allSectionBoxes.length) {
+        params.set('sections', checkedSections.join(','));
+    }
+
     const base = format === 'pdf'
         ? "{{ url_for('export_hod_students_pdf') }}"
         : "{{ url_for('export_hod_students_csv') }}";

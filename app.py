@@ -1079,7 +1079,11 @@ def hod_dashboard():
         abort(403)
     
     department_name = get_active_department(current_user)
-    complaints = Complaint.query.join(User, Complaint.user_id == User.id).filter(User.department == department_name).all()
+    complaints = Complaint.query.join(User, Complaint.user_id == User.id).filter(
+        User.department == department_name,
+        Complaint.is_overdue.is_(True)
+    ).all()
+    users = User.query.filter_by(department=department_name).all()
     users = User.query.filter_by(department=department_name).all()
     students = User.query.filter_by(department=department_name, role='student').all()
     staff = User.query.filter_by(department=department_name, role='staff').all()
@@ -1293,17 +1297,25 @@ STUDENT_EXPORT_COLUMNS = [
 ]
 
 
+def _normalize_year_display(year_value):
+    """Convert Year values like '1st Year', '2nd Year', '3rd Year', '4th Year'
+    into just the number ('1', '2', '3', '4') for exports. Falls back to the
+    original value unchanged if it doesn't match the expected pattern."""
+    import re
+    if not year_value:
+        return ''
+    match = re.match(r'^\s*(\d+)', str(year_value))
+    return match.group(1) if match else str(year_value)
+
+
 def _student_row_dict(student, mentor=None):
-    """Build a flat dict of every exportable field for one student. Pass a
-    precomputed mentor to avoid an extra query per row when the caller
-    already looked it up (e.g. inside a loop that also needs it for grouping)."""
     if mentor is None:
         mentor = get_primary_assigned_mentor(student)
     return {
         'roll_number': student.roll_number or '',
         'username': student.username,
         'email': student.email,
-        'year': student.year or '',
+        'year': _normalize_year_display(student.year),
         'section': student.section or '',
         'mentor': mentor.username if mentor else 'Not assigned',
         'phone': student.phone or '',
@@ -1311,7 +1323,6 @@ def _student_row_dict(student, mentor=None):
         'parent_phone': student.parent_phone or '',
         'address': student.address or '',
     }
-
 
 def _resolve_export_columns(requested_keys, all_columns):
     """Filter all_columns (list of (key,label)) down to just the requested
@@ -1522,9 +1533,30 @@ def export_hod_students_csv():
     from flask import Response
 
     department_name = get_active_department(current_user)
-    students = User.query.filter_by(
-        department=department_name, role='student'
-    ).order_by(User.year, User.section, User.roll_number).all()
+    students_query = User.query.filter_by(department=department_name, role='student')
+
+    year_filter_list = [y for y in request.args.get('years', '').split(',') if y]
+    section_filter_list = [s for s in request.args.get('sections', '').split(',') if s]
+
+    if year_filter_list:
+        students_query = students_query.filter(User.year.in_(year_filter_list))
+    if section_filter_list:
+        students_query = students_query.filter(User.section.in_(section_filter_list))
+
+    import re
+
+    def roll_number_sort_key(student):
+        if not student.roll_number:
+            return (1, 0, '')
+        match = re.search(r'(\d+)$', student.roll_number)
+        if match:
+            return (0, int(match.group(1)), student.roll_number)
+        return (0, 0, student.roll_number)
+
+    students = sorted(
+        students_query.all(),
+        key=lambda s: (s.year or '', s.section or '', roll_number_sort_key(s))
+    )
 
     csv_data = _build_students_csv(students, columns=_get_requested_columns())
     filename = f"{department_name}_students_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
@@ -1548,9 +1580,30 @@ def export_hod_students_pdf():
     from itertools import groupby
 
     department_name = get_active_department(current_user)
-    students = User.query.filter_by(
-        department=department_name, role='student'
-    ).order_by(User.year, User.section, User.roll_number).all()
+    students_query = User.query.filter_by(department=department_name, role='student')
+
+    year_filter_list = [y for y in request.args.get('years', '').split(',') if y]
+    section_filter_list = [s for s in request.args.get('sections', '').split(',') if s]
+
+    if year_filter_list:
+        students_query = students_query.filter(User.year.in_(year_filter_list))
+    if section_filter_list:
+        students_query = students_query.filter(User.section.in_(section_filter_list))
+
+    import re
+
+    def roll_number_sort_key(student):
+        if not student.roll_number:
+            return (1, 0, '')
+        match = re.search(r'(\d+)$', student.roll_number)
+        if match:
+            return (0, int(match.group(1)), student.roll_number)
+        return (0, 0, student.roll_number)
+
+    students = sorted(
+        students_query.all(),
+        key=lambda s: (s.year or '', s.section or '', roll_number_sort_key(s))
+    )
 
     selected = _resolve_export_columns(_get_requested_columns(), STUDENT_EXPORT_COLUMNS)
 
@@ -1565,16 +1618,15 @@ def export_hod_students_pdf():
         f"Total: {len(students)}",
         styles['Normal']
     ))
-    story.append(Spacer(1, 12))
+    story.append(Spacer(1, 16))
 
-    # Group by (year, section) so each group prints as its own labeled table
     def group_key(s):
         return (s.year or 'Unassigned', s.section or '-')
 
     for (year, section), group in groupby(students, key=group_key):
         group_list = list(group)
         story.append(Paragraph(f"Year {year}, Section {section} &nbsp; ({len(group_list)} students)", styles['Heading2']))
-        story.append(Spacer(1, 6))
+        story.append(Spacer(1, 7))
 
         row_dicts = [_student_row_dict(s) for s in group_list]
         table = _build_pdf_table(selected, row_dicts, doc.width)
@@ -1893,9 +1945,10 @@ def view_complaints():
     if is_super_admin(current_user):
         query = Complaint.query.join(User, Complaint.user_id == User.id)
 
-    elif current_user.role == 'admin':
+    elif is_department_admin(current_user):
         query = Complaint.query.join(User, Complaint.user_id == User.id).filter(
-            User.department == current_user.department
+            User.department == get_active_department(current_user),
+            Complaint.is_overdue.is_(True)
         )
 
     elif current_user.role in ['staff', 'mentor']:
@@ -2019,7 +2072,8 @@ def _scope_complaints_query(search_query, category_filter, status_filter):
         query = Complaint.query
     elif is_department_admin(current_user):
         query = Complaint.query.join(User, Complaint.user_id == User.id).filter(
-            User.department == get_active_department(current_user)
+            User.department == get_active_department(current_user),
+            Complaint.is_overdue.is_(True)
         )
     elif current_user.role in ['staff', 'mentor']:
         query = Complaint.query.filter(
@@ -3838,13 +3892,50 @@ def analytics_board():
 @app.route('/notifications')
 @login_required
 def view_notifications():
-    notifications = Notification.query.filter_by(user_id=current_user.id).order_by(Notification.created_at.desc()).all()
+    category_filter = request.args.get('category', '')
+
+    query = Notification.query.filter_by(user_id=current_user.id)
+    if category_filter:
+        query = query.join(Complaint, Notification.complaint_id == Complaint.id).filter(Complaint.category == category_filter)
+
+    notifications = query.order_by(Notification.created_at.desc()).all()
     for notification in notifications:
         notification.is_read = True
     db.session.commit()
-    return render_template('notifications.html', notifications=notifications)
+
+    categories = [
+        ('academic', 'Academic'),
+        ('administrative', 'Administrative'),
+        ('facility', 'Facility'),
+        ('harassment', 'Harassment'),
+        ('technical', 'Technical'),
+        ('other', 'Other')
+    ]
+
+    return render_template('notifications.html', notifications=notifications, categories=categories, category_filter=category_filter)
+@app.route('/notification/<int:notification_id>/delete', methods=['POST'])
+@login_required
+def delete_notification(notification_id):
+    notification = Notification.query.get_or_404(notification_id)
+    if notification.user_id != current_user.id:
+        abort(403)
+    db.session.delete(notification)
+    db.session.commit()
+    flash('Notification deleted.', 'success')
+    return redirect(url_for('view_notifications', category=request.args.get('category', '')))
 
 
+@app.route('/notifications/delete-all', methods=['POST'])
+@login_required
+def delete_all_notifications():
+    category_filter = request.args.get('category', '')
+    query = Notification.query.filter_by(user_id=current_user.id)
+    if category_filter:
+        query = query.join(Complaint, Notification.complaint_id == Complaint.id).filter(Complaint.category == category_filter)
+    deleted_count = query.delete(synchronize_session=False)
+    db.session.commit()
+    flash(f'Deleted {deleted_count} notification(s).', 'success')
+    return redirect(url_for('view_notifications'))
 @app.route('/profile')
 @login_required
 def profile():
