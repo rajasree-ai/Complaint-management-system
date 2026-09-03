@@ -1943,7 +1943,9 @@ def view_complaints():
     department_filter = request.args.get('department', '')
     # ROLE BASED ACCESS
     if is_super_admin(current_user):
-        query = Complaint.query.join(User, Complaint.user_id == User.id)
+        query = Complaint.query.join(User, Complaint.user_id == User.id).filter(
+            Complaint.is_overdue.is_(True)
+        )
 
     elif is_department_admin(current_user):
         query = Complaint.query.join(User, Complaint.user_id == User.id).filter(
@@ -2069,7 +2071,7 @@ def _resolve_complaint_columns(requested_keys):
 def _scope_complaints_query(search_query, category_filter, status_filter):
     """Role-based base query shared by both complaint export routes."""
     if is_super_admin(current_user):
-        query = Complaint.query
+        query = Complaint.query.filter(Complaint.is_overdue.is_(True))
     elif is_department_admin(current_user):
         query = Complaint.query.join(User, Complaint.user_id == User.id).filter(
             User.department == get_active_department(current_user),
